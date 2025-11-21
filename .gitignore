@@ -2,6 +2,10 @@
 data/
 !data/README.md
 
+# Rawtherapee cli
+squashfs-root/
+RawTherapee_*.AppImage
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
