@@ -17,9 +17,9 @@ from multiprocessing import cpu_count
 from tqdm import tqdm
 import warnings
 
-from image_processing_api.constants import COLORCHECKER_REFERENCE_SRGB
+from svs_raw_api.constants import COLORCHECKER_REFERENCE_SRGB
 
-from image_processing_api.data import (
+from svs_raw_api.data import (
     ProcessingConfig,
     CalibrationConfig,
     CalibrationResult,
@@ -27,8 +27,8 @@ from image_processing_api.data import (
     BatchResult
 )
 
-from image_processing_api.selection import MultiPatchSelector
-from image_processing_api.processing_utils import (
+from svs_raw_api.selection import MultiPatchSelector
+from svs_raw_api.processing_utils import (
     load_raw_image, demosaic_image, apply_color_correction,
     apply_exposure_compensation, apply_tone_curve, 
     apply_highlight_rolloff

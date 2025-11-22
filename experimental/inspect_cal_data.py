@@ -1,7 +1,7 @@
 import numpy as np
 
-data = "/home/mkutuga/SemiF-Preprocessing/calibration_results/data/calibration_data_20251119_171642.npy"
-matrix = "/home/mkutuga/SemiF-Preprocessing/calibration_results/data/calibration_matrix_20251119_171642.npy"
+data = "calibration_results/data/calibration_data_20251119_171642.npy"
+matrix = "calibration_results/data/calibration_matrix_20251119_171642.npy"
 
 # open both files and inspect their contents
 cal_data = np.load(data, allow_pickle=True).item()

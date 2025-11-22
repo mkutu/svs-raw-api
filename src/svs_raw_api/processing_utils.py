@@ -5,9 +5,8 @@ Performance-enhanced version with vectorized operations and parallel support
 
 import cv2
 import numpy as np
-from typing import Tuple
 from pathlib import Path
-from image_processing_api.constants import WIDTH, HEIGHT, BLACK_LEVEL_SHIFTED, EFFECTIVE_RANGE
+from svs_raw_api.constants import WIDTH, HEIGHT, BLACK_LEVEL_SHIFTED, EFFECTIVE_RANGE
 
 # Optional: Try to import numba for JIT compilation
 try:

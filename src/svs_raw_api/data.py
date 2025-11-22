@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 # Local application imports
-from image_processing_api.constants import (
+from svs_raw_api.constants import (
     BIT_DEPTH,
     BLACK_LEVEL_SHIFTED,
     CAMERA_MODEL,

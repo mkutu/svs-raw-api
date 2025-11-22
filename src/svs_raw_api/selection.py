@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from typing import List, Tuple, Optional
 
-from image_processing_api.constants import PATCH_NAMES
+from svs_raw_api.constants import PATCH_NAMES
 
 # ============================================================================
 # COLORCHECKER PROCESSING FUNCTIONS

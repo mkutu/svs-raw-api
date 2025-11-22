@@ -8,33 +8,35 @@ This script shows how to use both the original and optimized versions.
 from pathlib import Path
 import numpy as np
 
-from image_processing_api import (
+from svs_raw_api import (
     CalibrationConfig, CalibrationResult, ProcessingConfig
 )
-from image_processing_api import ImageProcessor as OptimizedProcessor
+from svs_raw_api import ImageProcessor as OptimizedProcessor
 # ============================================================================
 # SETUP (Same for both versions)
 # ============================================================================
 
 # Load calibration matrix
-calibration_path = Path("calibration_results/data/calibration_matrix_20251119_171642.npy")
-color_matrix = np.load(calibration_path)
+raw_colorchecker        = Path('data/raw/MD_1759501672.RAW')
+calibration_path        = Path('data/matrices/calibration_matrix_test.npy')
+data                    = Path("data/calibration/calibration_data_test.npy")
+output_dir              = Path('data/processed')
 
 # Paths
 batch_id = 'MD_2025-10-03'
 raw_dir = Path(f'/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/{batch_id}')
-# raw_dir = Path('./colorchecker_raw')
-output_dir = Path("processed_images")
 
 # ============================================================================
 # CONFIGURATION (Same for both versions)
 # ============================================================================
 
+color_matrix = np.load(calibration_path)
 
 processor = OptimizedProcessor(n_workers=12)
 
 calib_config = CalibrationConfig()
-calib_config.colorchecker_raw_path  = Path('/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/MD_2025-10-03/MD_1759501672.RAW')
+calib_config.output_dir             = output_dir
+calib_config.colorchecker_raw_path  = raw_colorchecker
 calib_config.checker_top_left       = (5258, 5863)
 calib_config.checker_bottom_right   = (6043, 6817)
 calib_config.adjust_white           = False
@@ -42,8 +44,8 @@ calib_config.exclude_white          = False
 calib_config.display_scale          = 0.5
 calib_config.calc_wb                = False
 
-calib_result: CalibrationResult = processor.calibrate(calib_config)
-calib_result.export_calibration_results()
+# calib_result: CalibrationResult = processor.calibrate(calib_config)
+# calib_result.export_calibration_results()
 
 config = ProcessingConfig(
     color_matrix=color_matrix,

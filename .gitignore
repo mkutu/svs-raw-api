@@ -1,6 +1,8 @@
 # data files
-data/
+data/processed/
+data/raw
 !data/README.md
+data/results
 
 # Rawtherapee cli
 squashfs-root/
