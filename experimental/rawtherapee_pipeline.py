@@ -4,7 +4,7 @@ import subprocess
 from omegaconf import DictConfig
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from image_processing_api import RawTherapeeConfig
+from svs_raw_api import RawTherapeeConfig
 
 log = logging.getLogger(__name__)
 
