@@ -38,25 +38,14 @@ from .constants import (
 
 # Data structures
 from .data import (
-    CameraConfig,
-    ProcessingConfig,
     CalibrationConfig,
-    CalibrationResult,
-    ProcessingResult,
-    BatchResult,
-    RawTherapeeConfig
+    CalibrationResult
 )
 
 # Image processing functions
 from .processing_utils import (
     load_raw_image,
-    demosaic_image,
-    apply_color_correction,
-    apply_gamma_correction,
-    apply_exposure_compensation,
-    apply_highlight_rolloff,
-    apply_tone_curve,
-    check_clipping_stats
+    demosaic_image
 )
 
 
@@ -118,24 +107,12 @@ __all__ = [
     'M_SRGB_TO_XYZ',
     
     # Data structures
-    'CameraConfig',
-    'ProcessingConfig',
     'CalibrationConfig',
     'CalibrationResult',
-    'ProcessingResult',
-    'BatchResult',
-    'RawTherapeeConfig',
     
     # Image processing
     'load_raw_image',
     'demosaic_image',
-    'apply_color_correction',
-    'apply_gamma_correction',
-    'apply_exposure_compensation',
-    'apply_highlight_rolloff',
-    'apply_tone_curve',
-    'apply_tone_curve_with_prescale',
-    'check_clipping_stats',
     
     # ColorChecker
     'isolate_colorchecker',

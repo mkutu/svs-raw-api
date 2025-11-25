@@ -5,33 +5,20 @@ For SVS-Vistek shr661CXGE camera with inspec.x L 4/60 lens
 This module provides a clean API for RAW image processing with ColorChecker calibration.
 OPTIMIZED VERSION with parallel processing support.
 """
-
-import cv2
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 from datetime import datetime
-import json
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count
-from tqdm import tqdm
-import warnings
-
 from svs_raw_api.constants import COLORCHECKER_REFERENCE_SRGB
 
 from svs_raw_api.data import (
-    ProcessingConfig,
     CalibrationConfig,
-    CalibrationResult,
-    ProcessingResult,
-    BatchResult
+    CalibrationResult
 )
 
 from svs_raw_api.selection import MultiPatchSelector
 from svs_raw_api.processing_utils import (
-    load_raw_image, demosaic_image, apply_color_correction,
-    apply_exposure_compensation, apply_tone_curve, 
-    apply_highlight_rolloff
+    load_raw_image, demosaic_image,
 )
 from svs_raw_api.ccm import (
     srgb_to_linear,
@@ -43,97 +30,6 @@ from svs_raw_api.ccm import (
     compute_wb,
 )
 
-
-def _process_single_image_worker(args: Tuple) -> ProcessingResult:
-    """
-    Worker function for parallel processing.
-    Must be at module level for pickling.
-    """
-    input_path, params, quiet = args
-    
-    try:
-        # Load and demosaic
-        nparray = load_raw_image(input_path)
-        rgb = demosaic_image(nparray)
-        
-        # Color correction
-        if params.color_matrix is not None:
-            rgb = apply_color_correction(rgb, params.color_matrix)
-        
-        # Exposure
-        if params.exposure_stops != 0.0:
-            rgb = apply_exposure_compensation(rgb, params.exposure_stops)
-        
-        # Tone mapping
-        if params.tone_mapping == 'rolloff':
-            rgb = apply_highlight_rolloff(rgb, params.highlight_threshold, params.highlight_smoothness)
-        elif params.tone_mapping == 'reinhard':
-            rgb = apply_tone_curve(rgb, 'reinhard')
-        elif params.tone_mapping == 'aces':
-            rgb = apply_tone_curve(rgb, 'aces')
-        elif params.tone_mapping == 'reinhard_extended':
-            rgb = apply_tone_curve(rgb, 'reinhard_extended', white_point=params.white_point)
-        
-        # Gamma
-        if params.gamma != 1.0:
-            rgb = rgb ** params.gamma
-        
-        # Clip final output
-        rgb = np.clip(rgb, 0, 1)
-        
-        # Save output
-        output_dir = params.output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Full resolution output
-        fullres_path = None
-        if params.output_fullres:
-            fullres_path = output_dir / f"{input_path.stem}_full.{params.output_format}"
-            _save_image(rgb, fullres_path, params.output_format, params.output_quality, params.output_bit_depth)
-        
-        # Preview output
-        preview_path = None
-        if params.output_preview:
-            preview_h = int(rgb.shape[0] * params.preview_scale)
-            preview_w = int(rgb.shape[1] * params.preview_scale)
-            rgb_preview = cv2.resize(rgb, (preview_w, preview_h), interpolation=cv2.INTER_AREA)
-            preview_path = output_dir / f"{input_path.stem}_preview.{params.output_format}"
-            _save_image(rgb_preview, preview_path, params.output_format, params.output_quality, params.output_bit_depth)
-        
-        output_path = fullres_path if fullres_path else preview_path
-        
-        return ProcessingResult(
-            input_path=str(input_path),
-            output_path=str(output_path),
-            preview_path=str(preview_path) if preview_path else None,
-            status='success'
-        )
-        
-    except Exception as e:
-        if not quiet:
-            warnings.warn(f"Error processing {input_path.name}: {e}")
-        return ProcessingResult(
-            input_path=str(input_path),
-            output_path='',
-            preview_path=None,
-            status='error',
-            error=str(e)
-        )
-
-
-def _save_image(rgb: np.ndarray, path: Path, format: str, quality: int, bit_depth: int):
-    """Save image to disk."""
-    if bit_depth == 8:
-        img_out = (rgb * 255).astype(np.uint8)
-    else:
-        img_out = (rgb * 65535).astype(np.uint16)
-    
-    img_bgr = cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR)
-    
-    if format == 'jpg':
-        cv2.imwrite(str(path), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-    else:
-        cv2.imwrite(str(path), img_bgr)
 
 
 class ImageProcessor:
@@ -154,13 +50,6 @@ class ImageProcessor:
         self.wb_gains = None
         self.reference_colors = COLORCHECKER_REFERENCE_SRGB.copy()
         
-        # Set up parallel processing
-        if n_workers is None:
-            self.n_workers = max(1, cpu_count() - 1)
-        else:
-            self.n_workers = max(1, n_workers)
-        
-        print(f"ImageProcessor initialized with {self.n_workers} workers")
     
     def _load_and_demosaic(self, raw_path: Path) -> np.ndarray:
         """Load RAW image and demosaic."""
@@ -323,20 +212,6 @@ class ImageProcessor:
             output_path=str(output_path)
         )
     
-    def _save_comparison(self, result: CalibrationResult, isolated: np.ndarray, output_path: Path):
-        """Save before/after comparison."""
-        from svs_raw_api.selection import save_comparison_image
-        
-        # Apply correction to isolated region for comparison
-        corrected = apply_color_correction(isolated, result.color_matrix)
-        corrected = np.clip(corrected, 0, 1)
-        
-        save_comparison_image(
-            isolated,
-            corrected,
-            display_scale=0.3,
-            output_path=str(output_path)
-        )
     
     def _print_calibration_summary(self, result: CalibrationResult):
         """Print calibration summary."""
@@ -351,43 +226,6 @@ class ImageProcessor:
             print(f"Clipped patches: {[i+1 for i in result.clipped_patches]}")
         print("="*70)
     
-    def _export_image_output(self, output_path: Path, params: ProcessingConfig, rgb: np.ndarray) -> Optional[Path]:
-        """Export image with full resolution and/or preview."""
-        output_dir = output_path.parent
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        preview_path = None
-        
-        # Full resolution
-        if params.output_fullres:
-            _save_image(rgb, output_path, params.output_format, params.output_quality, params.output_bit_depth)
-            print(f"  ✓ Saved full: {output_path.name}")
-        
-        # Preview
-        if params.output_preview:
-            preview_h = int(rgb.shape[0] * params.preview_scale)
-            preview_w = int(rgb.shape[1] * params.preview_scale)
-            rgb_preview = cv2.resize(rgb, (preview_w, preview_h), interpolation=cv2.INTER_AREA)
-            
-            preview_path = output_path.parent / f"{output_path.stem}_preview{output_path.suffix}"
-            _save_image(rgb_preview, preview_path, params.output_format, params.output_quality, params.output_bit_depth)
-            print(f"  ✓ Saved preview: {preview_path.name}")
-        
-        return preview_path
-    
-    def load_calibration(self, matrix_path: Path, json_path: Optional[Path] = None):
-        """Load pre-computed calibration."""
-        self.color_matrix = np.load(matrix_path)["color_matrix"]
-        self.forward_matrix = np.load(matrix_path)["forward_matrix"]
-        print(f"Loaded color matrix from: {matrix_path}")
-        print(f"Loaded forward matrix from: {matrix_path}")
-        if json_path and json_path.exists():
-            with open(json_path, 'r') as f:
-                metadata = json.load(f)
-                self.wb_gains = metadata.get('wb_gains', {})
-                print(f"Loaded white balance: R={self.wb_gains.get('R_gain', 1.0):.4f}, "
-                      f"G={self.wb_gains.get('G_gain', 1.0):.4f}, "
-                      f"B={self.wb_gains.get('B_gain', 1.0):.4f}")
 
     def calibrate(self,
                                    calib_config: CalibrationConfig) -> CalibrationResult:
@@ -476,227 +314,7 @@ class ImageProcessor:
         vis_output_path = calib_config.output_dir / "plots" / f"calibration_patches_{result.timestamp}.png"
         vis_output_path.parent.mkdir(parents=True, exist_ok=True)
         self._save_visualization(result, isolated_checker, vis_output_path)
-        comp_output_path = calib_config.output_dir / "plots" / f"calibration_comparison_{result.timestamp}.png"
-        comp_output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._save_comparison(result, isolated_checker, comp_output_path)
         
         return result
 
-    def process_image(self,
-                     input_path: Path,
-                     params: ProcessingConfig) -> ProcessingResult:
-        """
-        Process a single RAW image.
-        
-        Args:
-            input_path: Path to RAW file
-            params: ProcessingConfig configuration
-            
-        Returns:
-            ProcessingResult with status
-        """
-        return _process_single_image_worker((input_path, params, False))
-    
-    def process_batch(self,
-                     input_dir: Path,
-                     params: ProcessingConfig,
-                     pattern: str = "*.RAW",
-                     skip_first: int = 0,
-                     limit: Optional[int] = None,
-                     use_parallel: bool = True,
-                     show_progress: bool = True) -> BatchResult:
-        """
-        Process batch of RAW images with parallel processing.
-        
-        Args:
-            input_dir: Input directory
-            params: ProcessingConfig configuration
-            pattern: File pattern (default "*.RAW")
-            skip_first: Skip first N files
-            limit: Max files to process
-            use_parallel: Use parallel processing (default True)
-            show_progress: Show progress bar (default True)
-            
-        Returns:
-            BatchResult with statistics
-        """
-        if params.color_matrix is None:
-            raise ValueError("No calibration loaded - set params.color_matrix")
-        
-        # Find files
-        if not input_dir.exists():
-            raise ValueError(f"Input directory not found: {input_dir}")
-        
-        raw_files = sorted(list(input_dir.glob(pattern)))
-        if skip_first > 0:
-            raw_files = raw_files[skip_first:]
-        if limit is not None:
-            raw_files = raw_files[:limit]
-        
-        print("\n" + "="*70)
-        print("BATCH PROCESSING")
-        print("="*70)
-        print(f"Files: {len(raw_files)}")
-        print(f"Workers: {self.n_workers if use_parallel else 1}")
-        print(f"Gamma: {params.gamma}, Exposure: {params.exposure_stops:+.2f}, Tone: {params.tone_mapping}")
-        print("="*70)
-        
-        if len(raw_files) == 0:
-            return BatchResult(0, 0, 0, [], str(params.output_dir))
-        
-        # Prepare arguments for workers
-        task_args = [(f, params, True) for f in raw_files]
-        
-        # Process files
-        results = []
-        
-        if use_parallel and self.n_workers > 1:
-            # Parallel processing
-            with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
-                if show_progress:
-                    # With progress bar
-                    futures = {executor.submit(_process_single_image_worker, args): args[0] 
-                             for args in task_args}
-                    
-                    with tqdm(total=len(raw_files), desc="Processing", unit="image") as pbar:
-                        for future in as_completed(futures):
-                            result = future.result()
-                            results.append(result)
-                            
-                            if result.status == 'success':
-                                pbar.set_postfix_str(f"✓ {Path(result.input_path).name}")
-                            else:
-                                pbar.set_postfix_str(f"✗ {Path(result.input_path).name}")
-                            pbar.update(1)
-                else:
-                    # Without progress bar
-                    futures = [executor.submit(_process_single_image_worker, args) 
-                             for args in task_args]
-                    for future in as_completed(futures):
-                        results.append(future.result())
-        else:
-            # Sequential processing
-            if show_progress:
-                task_iter = tqdm(task_args, desc="Processing", unit="image")
-            else:
-                task_iter = task_args
-            
-            for args in task_iter:
-                result = _process_single_image_worker(args)
-                results.append(result)
-                
-                if show_progress:
-                    if result.status == 'success':
-                        task_iter.set_postfix_str(f"✓ {Path(result.input_path).name}")
-                    else:
-                        task_iter.set_postfix_str(f"✗ {Path(result.input_path).name}")
-        
-        # Create result
-        successful = sum(1 for r in results if r.status == 'success')
-        failed = sum(1 for r in results if r.status == 'error')
-        
-        batch_result = BatchResult(
-            total=len(raw_files),
-            successful=successful,
-            failed=failed,
-            results=results,
-            output_dir=str(params.output_dir.absolute())
-        )
-        
-        batch_result.print_summary()
-        return batch_result
-    
-    def parameter_sweep(self,
-                       input_dir: Path,
-                       output_root: Path,
-                       sweep_config: Dict[str, List],
-                       base_config: ProcessingConfig,
-                       pattern: str = "*.RAW",
-                       limit: Optional[int] = None) -> Dict[str, any]:
-        """
-        Run systematic parameter sweep across multiple values with parallel processing.
-        
-        Args:
-            input_dir: Directory containing RAW files
-            output_root: Root directory for organized outputs
-            sweep_config: Dictionary defining parameter ranges, e.g.:
-                {
-                    'tone_mapping': ['rolloff', 'reinhard', 'aces'],
-                    'gamma': [0.7, 0.85, 0.9],
-                    'exposure_stops': [0.3, 0.5, 0.7]
-                }
-            base_config: Base ProcessingConfig to modify
-            pattern: File pattern for RAW files
-            limit: Limit number of files to process
-                
-        Returns:
-            Dictionary with sweep results and output locations
-        """
-        import itertools
-        
-        # Generate all parameter combinations
-        param_names = list(sweep_config.keys())
-        param_values = list(sweep_config.values())
-        combinations = list(itertools.product(*param_values))
-        
-        print(f"\nParameter Sweep: {len(combinations)} combinations")
-        print(f"Parameters: {param_names}")
-        
-        sweep_results = []
-        
-        for i, combo in enumerate(combinations, 1):
-            # Create config for this combination
-            config = ProcessingConfig(
-                **{k: v for k, v in base_config.__dict__.items() 
-                   if k not in param_names}
-            )
-            
-            # Apply sweep parameters
-            for name, value in zip(param_names, combo):
-                setattr(config, name, value)
-            
-            # Create output directory
-            combo_str = "_".join(f"{n}={v}" for n, v in zip(param_names, combo))
-            config.output_dir = output_root / combo_str
-            
-            print(f"\n[{i}/{len(combinations)}] {combo_str}")
-            
-            # Process batch
-            result = self.process_batch(
-                input_dir=input_dir,
-                params=config,
-                pattern=pattern,
-                limit=limit,
-                use_parallel=True,
-                show_progress=False
-            )
-            
-            sweep_results.append({
-                'parameters': dict(zip(param_names, combo)),
-                'result': result
-            })
-        
-        # Save sweep summary
-        summary_path = output_root / "sweep_summary.json"
-        with open(summary_path, 'w') as f:
-            json.dump({
-                'total_combinations': len(combinations),
-                'parameters': param_names,
-                'results': [
-                    {
-                        'params': r['parameters'],
-                        'successful': r['result'].successful,
-                        'failed': r['result'].failed,
-                        'output_dir': r['result'].output_dir
-                    }
-                    for r in sweep_results
-                ]
-            }, f, indent=2)
-        
-        print(f"\n✓ Sweep complete! Summary saved to: {summary_path}")
-        
-        return {
-            'combinations': len(combinations),
-            'results': sweep_results,
-            'summary_path': str(summary_path)
-        }
+   
