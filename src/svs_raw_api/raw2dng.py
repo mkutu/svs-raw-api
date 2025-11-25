@@ -35,7 +35,7 @@ class SVSRaw2DNG:
         dt = datetime.fromtimestamp(epoch_gmt, tz=timezone.utc)
         return dt.strftime("%Y:%m:%d %H:%M:%S")
 
-    def define_tags(self, raw_file: Path):
+    def define_tags(self):
         # --- DNG TAGS ---
         t = DNGTags()
         # images
@@ -88,15 +88,15 @@ class SVSRaw2DNG:
         t.set(Tag.PreviewColorSpace, dcfg.PreviewColorSpace)
         t.set(Tag.BaselineExposure, [dcfg.BaselineExposure])
 
-        # Exif
-        t.set(Tag.DateTimeOriginal, self.calculate_dt_from_epoch_gmt(raw_file.stem))
-        t.set(Tag.DateTime, self.calculate_dt_from_epoch_gmt(raw_file.stem))
-        # DateTimeOriginal
-        # DateTime
         return t
 
-    def run(self, tags, raw_image_16: np.ndarray, output_path: Path):
+    def run(self, tags: DNGTags, raw_file: Path, raw_image_16: np.ndarray, output_path: Path):
         r = RAW2DNG()
+
+        # Final tags having to do with time and file time stamp
+        tags.set(Tag.DateTimeOriginal, self.calculate_dt_from_epoch_gmt(raw_file.stem))
+        tags.set(Tag.DateTime, self.calculate_dt_from_epoch_gmt(raw_file.stem))
+        
         r.options(tags, path="", compress=False)
         r.convert(raw_image_16, filename=str(output_path))
 
