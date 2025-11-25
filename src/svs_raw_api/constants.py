@@ -9,12 +9,14 @@ import numpy as np
 # ============================================================================
 SENSOR_MODEL: str = "Sony IMX661LQA"
 CAMERA_MODEL: str = "SVS-Vistek shr661CXGE"
+SENSOR: str = "IMX661LQA"
 LENS_MODEL: str = "inspec.x L 4/60"
 FOCAL_LENGTH_MM: float = 60.0
 IMAGE_CIRCLE_MM: float = 70.0
 F_NUMBER: float = 4.0
 F_NUMBER_RANGE: tuple = (4, 32)
 BIT_DEPTH: int = 12
+BIT_DEPTH_SHIFTED: int = 16  # left-shifted to 16-bit container
 WIDTH: int = 13_376
 HEIGHT: int = 9_528
 
@@ -25,6 +27,7 @@ HEIGHT: int = 9_528
 # Black level - MEASURED from dark frame (lens cap on)
 BLACK_LEVEL_SHIFTED: int = 368  # 16-bit value
 BLACK_LEVEL_12BIT: int = 23     # Equivalent 12-bit value
+WHITE_LEVEL_SHIFTED: int = 65535       # 16-bit full scale
 
 # Bit depth
 RAW_MAX_VALUE: int = 65520  # 4095 << 4 (12-bit left-shifted to 16-bit)
@@ -66,3 +69,19 @@ COLORCHECKER_REFERENCE_SRGB: np.ndarray = np.array([
     [85, 85, 85],     # 23. Neutral 3.5
     [52, 52, 52]      # 24. Black
 ]) / 255.0
+
+# ============================================================================
+# CCM ESTIMATION CONSTANTS
+# ============================================================================
+# sRGB → XYZ transform.
+# canonical matrix for converting linear sRGB → CIE XYZ (D65)
+
+# They are **not invented** — they come from the **IEC 61966-2-1 sRGB specification**, and you will see the exact same matrix:
+M_SRGB_TO_XYZ= np.array(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ],
+        dtype=float,
+    )

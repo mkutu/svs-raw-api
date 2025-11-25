@@ -22,15 +22,18 @@ from .constants import (
     F_NUMBER,
     F_NUMBER_RANGE,
     BIT_DEPTH,
+    BIT_DEPTH_SHIFTED,
     WIDTH,
     HEIGHT,
     BLACK_LEVEL_SHIFTED,
     BLACK_LEVEL_12BIT,
+    WHITE_LEVEL_SHIFTED,
     RAW_MAX_VALUE,
     EFFECTIVE_RANGE,
     PATCH_NAMES,
     NUMBER_OF_PATCHES,
-    COLORCHECKER_REFERENCE_SRGB
+    COLORCHECKER_REFERENCE_SRGB,
+    M_SRGB_TO_XYZ,
 )
 
 # Data structures
@@ -68,6 +71,23 @@ from .selection import (
     analyze_color_matrix
 )
 
+from .ccm import (
+    srgb_to_linear,
+    srgb_to_xyz_d65,
+    load_calibration_json,
+    compute_forward_matrix,
+    compute_color_matrix, 
+    format_for_dng,
+    compute_error_stats,
+    compute_wb,
+)
+
+from .dng_tags import (
+    SVCamTagConfig,
+    ColorConfig
+)
+
+from .raw2dng import SVSRaw2DNG
 # Main API
 from .pipeline import ImageProcessor
 
@@ -84,15 +104,18 @@ __all__ = [
     'F_NUMBER',
     'F_NUMBER_RANGE',
     'BIT_DEPTH',
+    'BIT_DEPTH_SHIFTED',
     'WIDTH',
     'HEIGHT',
     'BLACK_LEVEL_SHIFTED',
     'BLACK_LEVEL_12BIT',
+    'WHITE_LEVEL_SHIFTED',
     'RAW_MAX_VALUE',
     'EFFECTIVE_RANGE',
     'PATCH_NAMES',
     'NUMBER_OF_PATCHES',
     'COLORCHECKER_REFERENCE_SRGB',
+    'M_SRGB_TO_XYZ',
     
     # Data structures
     'CameraConfig',
@@ -123,10 +146,28 @@ __all__ = [
     'save_comparison_image',
     'analyze_color_matrix',
 
+    # CCM utilities
+    'srgb_to_linear',
+    'srgb_to_xyz_d65',
+    'load_calibration_json',
+    'compute_forward_matrix',
+    'compute_color_matrix',
+    'format_for_dng',
+    'compute_error_stats',
+    'compute_wb',
+
     # Parameter grids
     'PARAMETER_GRIDS',
     'get_baseline_params',
+
+    # DNG tags
+    'SVCamTagConfig',
+    'ColorConfig',
+    
+    # Raw to DNG conversion
+    'SVSRaw2DNG',
     
     # Main API
     'ImageProcessor',
+
 ]

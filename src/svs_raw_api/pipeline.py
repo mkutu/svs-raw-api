@@ -33,6 +33,15 @@ from svs_raw_api.processing_utils import (
     apply_exposure_compensation, apply_tone_curve, 
     apply_highlight_rolloff
 )
+from svs_raw_api.ccm import (
+    srgb_to_linear,
+    srgb_to_xyz_d65,
+    compute_forward_matrix,
+    compute_color_matrix, 
+    format_for_dng,
+    compute_error_stats,
+    compute_wb,
+)
 
 
 def _process_single_image_worker(args: Tuple) -> ProcessingResult:
@@ -141,6 +150,7 @@ class ImageProcessor:
             n_workers: Number of parallel workers (default: cpu_count() - 1)
         """
         self.color_matrix = None
+        self.forward_matrix = None
         self.wb_gains = None
         self.reference_colors = COLORCHECKER_REFERENCE_SRGB.copy()
         
@@ -237,28 +247,36 @@ class ImageProcessor:
         """Compute color correction matrix using least squares."""
         print("\nComputing color correction matrix...")
         
+        
         if exclude_patches is None:
             exclude_patches = []
         
-        # Create mask for patches to use
-        mask = np.ones(len(measured), dtype=bool)
-        mask[exclude_patches] = False
-        
-        # Use only non-excluded patches
-        measured_subset = measured[mask]
-        reference_subset = reference[mask]
-        
-        print(f"  Using {len(measured_subset)}/24 patches")
-        if exclude_patches:
-            print(f"  Excluded patches: {[i+1 for i in exclude_patches]}")
-        
-        # Compute matrix: measured @ M^T = reference
-        M = np.linalg.lstsq(measured_subset, reference_subset, rcond=None)[0].T
-        
-        print("\nColor correction matrix:")
-        print(M)
-        
-        return M
+        # 1) Reference sRGB -> linear -> XYZ
+        reference_lin = srgb_to_linear(reference)
+        reference_xyz = srgb_to_xyz_d65(reference_lin)
+
+        # 2) Solve for ForwardMatrix (camera -> XYZ)
+        F = compute_forward_matrix(measured, reference_xyz)
+
+        # 3) Compute ColorMatrix (XYZ -> camera)
+        C = compute_color_matrix(F)
+
+        WB = compute_wb(measured)
+
+        # 4) Format for DNG tags
+        forward_str = format_for_dng(F, transpose=False, decimals=6)
+        color_str = format_for_dng(C, transpose=False, decimals=6)
+
+        print("# ForwardMatrix1/2 (camera -> XYZ, D65)")
+        print(forward_str)
+        print()
+        print("# ColorMatrix1/2 (XYZ -> camera)")
+        print(color_str)
+
+        # 5) Error stats
+        compute_error_stats(measured, reference_xyz, F)
+
+        return C, F, WB
     
     def _test_correction(self,
                         measured: np.ndarray,
@@ -294,46 +312,10 @@ class ImageProcessor:
         print(f"  Improvement: {improvement:.1f}%")
         
         return errors
-
-    def _compute_white_balance(self,
-                              isolated: np.ndarray,
-                              patch_coords: List[Tuple[Tuple[int, int], Tuple[int, int]]]
-                              ) -> Dict[str, float]:
-        """Compute white balance gains from neutral patches."""
-        print("\nComputing white balance from neutral patches...")
-        
-        # Neutral patches are indices 18-23 (White, Neutral 8, 6.5, 5, 3.5, Black)
-        neutral_indices = [18, 19, 20, 21, 22, 23]
-        
-        patch_values = []
-        for i in neutral_indices:
-            (x1, y1), (x2, y2) = patch_coords[i]
-            patch = isolated[y1:y2, x1:x2]
-            avg = patch.reshape(-1, 3).mean(axis=0)
-            patch_values.append(avg)
-        
-        patch_values = np.array(patch_values)
-        
-        # Average across neutral patches
-        avg_neutral = patch_values.mean(axis=0)
-        r, g, b = avg_neutral
-        
-        # Calculate gains (normalize to green)
-        gains = {
-            'r_gain': g / r if r > 0 else 1.0,
-            'g_gain': 1.0,
-            'b_gain': g / b if b > 0 else 1.0
-        }
-        
-        print(f"  R gain: {gains['r_gain']:.3f}")
-        print(f"  G gain: {gains['g_gain']:.3f}")
-        print(f"  B gain: {gains['b_gain']:.3f}")
-        
-        return gains
     
     def _save_visualization(self, result: CalibrationResult, isolated: np.ndarray, output_path: Path):
         """Save visualization of patches with boxes."""
-        from image_processing_api.selection import save_patch_visualization
+        from svs_raw_api.selection import save_patch_visualization
         save_patch_visualization(
             isolated, 
             result.patch_coords,
@@ -343,7 +325,7 @@ class ImageProcessor:
     
     def _save_comparison(self, result: CalibrationResult, isolated: np.ndarray, output_path: Path):
         """Save before/after comparison."""
-        from image_processing_api.selection import save_comparison_image
+        from svs_raw_api.selection import save_comparison_image
         
         # Apply correction to isolated region for comparison
         corrected = apply_color_correction(isolated, result.color_matrix)
@@ -395,9 +377,10 @@ class ImageProcessor:
     
     def load_calibration(self, matrix_path: Path, json_path: Optional[Path] = None):
         """Load pre-computed calibration."""
-        self.color_matrix = np.load(matrix_path)
+        self.color_matrix = np.load(matrix_path)["color_matrix"]
+        self.forward_matrix = np.load(matrix_path)["forward_matrix"]
         print(f"Loaded color matrix from: {matrix_path}")
-        
+        print(f"Loaded forward matrix from: {matrix_path}")
         if json_path and json_path.exists():
             with open(json_path, 'r') as f:
                 metadata = json.load(f)
@@ -459,12 +442,7 @@ class ImageProcessor:
         exclude.extend(clipped_patches)
         
         # Compute color correction matrix
-        color_matrix = self._compute_matrix(measured_colors, reference, exclude_patches=exclude)
-        
-        # Compute white balance if requested
-        wb_gains = {}
-        if calib_config.calc_wb:
-            wb_gains = self._compute_white_balance(isolated_checker, patch_coords)
+        color_matrix, forward_matrix, wb_gains = self._compute_matrix(measured_colors, reference, exclude_patches=exclude)
         
         # Test correction
         corrected_colors = self._test_correction(measured_colors, color_matrix)
@@ -475,6 +453,7 @@ class ImageProcessor:
         # Create result
         result = CalibrationResult(
             color_matrix=color_matrix,
+            forward_matrix=forward_matrix,
             wb_gains=wb_gains,
             measured_colors=measured_colors,
             corrected_colors=corrected_colors,
@@ -486,6 +465,8 @@ class ImageProcessor:
             max_error_after=errors['max_after'],
             clipped_patches=clipped_patches,
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            output_dir=calib_config.output_dir,
+            output_path=calib_config.output_path
         )
         
         # Print summary
