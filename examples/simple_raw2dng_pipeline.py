@@ -11,8 +11,10 @@ def load_raw_image(raw_path: Path) -> np.ndarray:
     return raw_image_16
 
 # --- Load the raw 16-bit image directly ---
-raw_file = Path("data/raw/MD_1759501672.RAW")
-
+# raw_file = Path("data/raw/MD_1759501672.RAW")
+# raw_file = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/MD_2025-10-09/MD_1760033880.RAW")
+# raw_file = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/MD_2025-10-03/MD_1759502864.RAW")
+raw_file = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/NC_2025-06-23/NC_1750697912.RAW")
 # --- Load your custom color matrix (3x3) ---
 matrix_path = Path("data/profiles/MD_calibration_matrix_optimized.npy")
 
@@ -23,15 +25,18 @@ pp3_file = Path("data/profiles/MD_shr661_raw16.pp3")
 config_path = Path("examples/svs_tags.yaml")
 
 # --- LOAD RAW IMAGE ---
-batch_id = "NC_2025-11-21"
+batch_id = "NC_2025-06-23"
 lts_dir = Path(f"/mnt/research-projects/s/screberg/longterm_images2/semifield-upload/{batch_id}/")
-raw_images = sorted(list(lts_dir.glob("*.RAW")))
+# raw_images = sorted(list(lts_dir.glob("*.RAW")))
+raw_images = [raw_file]
 
 # --- Output path ---
 output_dir = Path(f"data/dngs/{batch_id}")
 output_dir.mkdir(parents=True, exist_ok=True)
-jpg_output_dir = Path(f"data/jpgs/{batch_id}")
-jpg_output_dir.mkdir(parents=True, exist_ok=True)
+
+# jpg_output_dir = Path(f"data/jpgs/{batch_id}")
+# jpg_output_dir.mkdir(parents=True, exist_ok=True)
+jpg_output_dir = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-developed-images/NC_2025-06-23/images/")
 
 # --- CLI ---
 rt_cli='/home/mkutuga/SemiF-Preprocessing/squashfs-root/usr/bin/rawtherapee-cli'
@@ -40,9 +45,10 @@ rt_cli='/home/mkutuga/SemiF-Preprocessing/squashfs-root/usr/bin/rawtherapee-cli'
 svs_dng = SVSRaw2DNG(config_path, matrix_path)
 t = svs_dng.define_tags()
 for raw_file in raw_images:
-    raw_image_16 = load_raw_image(raw_file)
-    dng_path = output_dir / f"{raw_file.stem}"
-    svs_dng.run(t, raw_file, raw_image_16, dng_path)
+    # raw_image_16 = load_raw_image(raw_file)
+    # dng_path = output_dir / f"{raw_file.stem}"
+    # svs_dng.run(t, raw_file, raw_image_16, dng_path)
+    dng_path = "/home/mkutuga/svs-raw-api/data/dngs/NC_2025-06-23/NC_1750697912"
 
     jpg_output_path = jpg_output_dir / f"{raw_file.stem}.jpg"
 
@@ -52,6 +58,7 @@ for raw_file in raw_images:
             "-p", pp3_file,
             "-j100",
             "-js3",
+            "-Y",
             "-c", f"{dng_path}.dng"
         ]
     try:
