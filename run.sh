@@ -30,7 +30,6 @@ CERES_DEVELOPED_IMAGES_DIR="/project/dash_agir/matthew.kutugata/semifield-develo
 mkdir -p $TMP_DEVELOPED_IMAGES_DIR
 mkdir -p $CERES_DEVELOPED_IMAGES_DIR
 
-
 globus transfer $JUNO_EP:$JUNO_SRC $CERES_EP:$CERES_90DAY_DEST --recursive --notify off
 
 /bin/cp -r $CERES_90DAY_DEST $TMP_DEVELOPED_IMAGES_DIR
@@ -45,4 +44,10 @@ cleanup() {
 # Register the cleanup function to run when job ends
 trap cleanup EXIT
 
+# Clone svs repo
+git clone https://github.com/mkutu/svs-raw-api.git
+cd svs-raw-api
+# Install svs package
 pip install -e .
+
+
