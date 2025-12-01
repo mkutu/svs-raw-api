@@ -5,6 +5,7 @@ data/dngs
 data/jpgs
 !data/README.md
 data/results
+sampled_jpgs/
 
 # Rawtherapee cli
 squashfs-root/

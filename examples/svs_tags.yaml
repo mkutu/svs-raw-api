@@ -2,9 +2,8 @@
 # NewSubfileType:                           # Long    A general indication of the kind of data contained in this subfile.
 # SubfileType:                              # Short   A general indication of the kind of data contained in this subfile. This field is deprecated. The NewSubfileType field should be used instead.
 image:
-  SVCamImageWidth: 13376                           # Long    The number of columns of image data, equal to the number of pixels per row. In JPEG compressed data a JPEG marker is used instead of this tag.
-  SVCamImageHeight: 9528                         # Long    The number of rows of image data. In JPEG compressed data a JPEG marker is used instead of this tag.
-  
+  SVCamImageWidth: 13376     # DNG_* only used for processing SVCam images
+  SVCamImageHeight: 9528
   BitsPerSample: 16                         # Short   The number of bits per image component. In this standard each component of the image is 8 bits, so the value for this tag is 8. See also <SamplesPerPixel>. In JPEG compressed data a JPEG marker is used instead of this tag.
   PhotometricInterpretation: 32803          # Short   The pixel composition. In JPEG compressed data a JPEG marker is used instead of this tag.  
   Orientation: 1 # string for DNG part else 1                            # Short   The image orientation viewed in terms of rows and columns.
