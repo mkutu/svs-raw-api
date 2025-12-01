@@ -1,0 +1,55 @@
+# Configuration for RAW to JPG batch reprocessing pipeline
+# SVS-Vistek shr661CXGE camera with inspec.x L 4/60 lens
+
+# Input/Output Paths
+paths:
+  # JSON summary from the batch/date-range script
+  summary_json: "examples/bbotv31_batches.json"
+  
+  # Upload RAWs directory (source RAW files)
+  upload_root: "/tmp/data/semifield-upload"
+  
+  # Developed image roots, keyed by LTS tag
+  developed_roots:
+    longterm_images: "/tmp/data/semifield-developed-images"
+    longterm_images2: "/tmp/data/semifield-developed-images"
+    GROW_DATA: "/tmp/data/semifield-developed-images"
+  
+  # Local output directories
+  dng_root: "tmp/data/dngs"
+  jpg_lts_root: "/tmp/data/semifield-developed-images"
+  
+  # Logging paths
+  log_dir: "/tmp/data/logs"
+  log_csv: "reprocessed_images_log.csv"
+
+# Camera calibration and processing profiles
+# NOTE: These are MD-specific paths. Update for NC/TX processing.
+calibration:
+  # Color correction matrix
+  matrix_path: "/project/dash_agir/matthew.kutugata/svs-raw-api/data/profiles/MD_calibration_matrix_optimized.npy"
+  
+  # SVS tags configuration
+  config_path: "/project/dash_agir/matthew.kutugata/svs-raw-api/examples/svs_tags.yaml"
+  
+  # RawTherapee processing profile
+  pp3_file: "/project/dash_agir/matthew.kutugata/svs-raw-api/data/profiles/MD_shr661_raw16.pp3"
+  
+  # RawTherapee CLI executable
+  rt_cli: "/home/mkutuga/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli"
+
+# Processing parallelization settings
+# Tune these based on your system's capabilities
+processing:
+  # Number of parallel RAW -> DNG conversions
+  n_dng_workers: 4
+  
+  # Number of parallel DNG -> JPG conversions
+  n_jpg_workers: 6
+  
+  # Total logical cores available
+  max_omp_threads: 48
+  
+  # OMP threads per RawTherapee instance (auto-calculated if not specified)
+  # If null, will be calculated as: max(1, max_omp_threads // n_jpg_workers)
+  omp_threads_per_rt: null
