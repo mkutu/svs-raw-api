@@ -1,0 +1,36 @@
+# config/scinet.yaml
+# All paths and settings in one place
+
+paths:
+  # Source data (slow network storage - copy to /tmp first!)
+  raw_data_source: /90daydata/dash_agir/data/semifield-upload
+  
+  # Permanent storage (project space)
+  project_base: /project/dash_agir/matthew.kutugata
+  output_dir: ${project_base}/semifield-developed-images
+  logs_dir: ${project_base}/logs
+  
+  # Repo (home directory)
+  repo: /home/matthew.kutugata/repos/svs-raw-api
+  
+  # Profiles and configs
+  color_matrix: ${repo}/data/profiles/MD_calibration_matrix_optimized.npy
+  pp3_profile: ${repo}/data/profiles/MD_shr661_raw16.pp3
+  svs_tags: ${repo}/conf/svs_tags.yaml
+  
+  # RawTherapee (will be set dynamically)
+  rawtherapee_cli: /home/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
+  
+  # Local node storage (fast, but erased when node shuts down)
+  tmp_base: /tmp
+
+processing:
+  
+  # Resource limits
+  threads_per_image: 4
+  memory_per_image: 16  # GB
+
+slurm:
+  account: dash_agir
+  partition: short
+  time_limit: "01:00:00"

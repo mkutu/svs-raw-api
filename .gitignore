@@ -7,6 +7,12 @@ data/jpgs
 data/results
 sampled_jpgs/
 
+# Logs
+logs/
+
+# Notebooks
+notebooks/.ipynb_checkpoints/
+
 # Rawtherapee cli
 squashfs-root/
 RawTherapee_*.AppImage
