@@ -1,0 +1,430 @@
+"""
+Enhanced Snakemake Pipeline for SVS RAW Image Processing
+Integrated with Three-Tier Storage System (NCSU → JUNO → Ceres)
+
+Workflow:
+1. Validate batch is on Ceres (transferred from JUNO)
+2. Process RAW → DNG → JPG
+3. Update database with processing status
+4. Archive outputs to project directory
+"""
+
+import os
+import sys
+from pathlib import Path
+import sqlite3
+from datetime import datetime
+
+# Import configuration
+configfile: "config/snakemake_config_enhanced.yaml"
+
+# Import database manager
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+try:
+    from db_manager import BatchDatabase
+except ImportError:
+    print("Warning: Could not import db_manager. Database updates will be skipped.")
+    BatchDatabase = None
+
+# Configuration
+MODE = config.get("mode", "single")  # single, discover, or batch
+BATCH_ID = config.get("batch_id", "")
+STATE_FILTER = config.get("state_filter", None)
+
+# Paths
+CERES_BASE = Path(config["paths"]["ceres_base_path"])
+OUTPUT_BASE = Path(config["paths"]["output_base"])
+DB_PATH = config["paths"].get("database_path", "/project/dash_agir/matthew.kutugata/pipeline_tracking.db")
+
+# Processing tools
+MATRIX_PATH = config["processing"]["matrix_path"]
+CONFIG_PATH = config["processing"]["config_path"]
+PP3_FILE = config["processing"]["pp3_file"]
+RAWTHERAPEE_CLI = config["processing"]["rawtherapee_cli"]
+
+# SLURM resources
+MAX_JOBS = config["resources"]["max_jobs"]
+
+# Database connection
+db = None
+if BatchDatabase and os.path.exists(DB_PATH):
+    db = BatchDatabase(DB_PATH)
+
+# Helper functions
+def get_batches_to_process():
+    """
+    Get list of batches to process based on mode
+    """
+    batches = []
+    
+    if MODE == "single":
+        # Process single specified batch
+        if not BATCH_ID:
+            raise ValueError("batch_id must be specified in single mode")
+        batches = [BATCH_ID]
+    
+    elif MODE == "batch":
+        # Process all batches ready for processing (transferred to Ceres)
+        if db:
+            batch_records = db.get_batches_by_status(
+                transfer_status="transferred",
+                processing_status="pending",
+                state_filter=STATE_FILTER
+            )
+            batches = [b["batch_id"] for b in batch_records]
+        else:
+            # Fallback: scan Ceres directory
+            for item in CERES_BASE.iterdir():
+                if item.is_dir() and "_" in item.name:
+                    batches.append(item.name)
+    
+    elif MODE == "discover":
+        # This mode is handled by globus_manager.py, not Snakemake
+        raise ValueError("discover mode should be run via workflow.sh, not Snakemake")
+    
+    return batches
+
+def validate_batch_on_ceres(batch_id):
+    """
+    Validate that batch exists on Ceres and has been properly transferred
+    """
+    batch_path = CERES_BASE / batch_id
+    
+    if not batch_path.exists():
+        raise ValueError(f"Batch {batch_id} not found on Ceres at {batch_path}")
+    
+    # Check for ARW files
+    raw_files = list(batch_path.glob("*.ARW"))
+    if not raw_files:
+        raise ValueError(f"No RAW files found in {batch_path}")
+    
+    # Check database status if available
+    if db:
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT transfer_status FROM batches WHERE batch_id = ?", (batch_id,))
+        result = cursor.fetchone()
+        
+        if result and result[0] != "transferred":
+            print(f"Warning: Batch {batch_id} database status is '{result[0]}', not 'transferred'")
+    
+    return True
+
+def get_raw_files(batch_id):
+    """
+    Get list of RAW files for a batch
+    """
+    batch_path = CERES_BASE / batch_id
+    return [f.name for f in batch_path.glob("*.ARW")]
+
+def update_batch_status(batch_id, status, error_msg=None):
+    """
+    Update batch processing status in database
+    """
+    if db:
+        db.update_batch_status(
+            batch_id=batch_id,
+            processing_status=status
+        )
+        
+        # Record in processing history
+        if status == "processing":
+            db.conn.cursor().execute('''
+                INSERT INTO processing_history 
+                (batch_id, job_id, status, started_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (batch_id, os.getenv("SLURM_JOB_ID", "local"), status))
+            db.conn.commit()
+        
+        elif status in ["completed", "failed"]:
+            # Get file counts
+            cursor = db.conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    SUM(CASE WHEN jpg_created = 1 THEN 1 ELSE 0 END) as processed,
+                    SUM(CASE WHEN jpg_created = 0 THEN 1 ELSE 0 END) as failed
+                FROM files WHERE batch_id = ?
+            ''', (batch_id,))
+            counts = cursor.fetchone()
+            
+            cursor.execute('''
+                INSERT INTO processing_history 
+                (batch_id, job_id, status, files_processed, files_failed, 
+                 error_message, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (batch_id, os.getenv("SLURM_JOB_ID", "local"), status,
+                  counts[0] or 0, counts[1] or 0, error_msg))
+            db.conn.commit()
+
+# Get batches to process
+BATCHES = get_batches_to_process()
+
+if not BATCHES:
+    print("No batches to process")
+    sys.exit(0)
+
+print(f"Processing {len(BATCHES)} batches: {BATCHES}")
+
+# Validate all batches are on Ceres
+for batch in BATCHES:
+    try:
+        validate_batch_on_ceres(batch)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+# Generate file lists for each batch
+BATCH_FILES = {batch: get_raw_files(batch) for batch in BATCHES}
+
+# Target rule
+rule all:
+    input:
+        expand("{output_base}/{batch}/done.txt", 
+               output_base=OUTPUT_BASE, 
+               batch=BATCHES)
+
+# Rule: Validate batch transfer status
+rule validate_batch:
+    output:
+        temp("{ceres_base}/{batch}/validated.txt")
+    params:
+        batch_id = lambda w: w.batch
+    run:
+        print(f"Validating batch: {params.batch_id}")
+        
+        # Check database status
+        if db:
+            cursor = db.conn.cursor()
+            cursor.execute("""
+                SELECT batch_id, ncsu_sync_status, transfer_status, processing_status 
+                FROM batches WHERE batch_id = ?
+            """, (params.batch_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                print(f"Database status for {params.batch_id}:")
+                print(f"  NCSU sync: {result[1]}")
+                print(f"  Transfer: {result[2]}")
+                print(f"  Processing: {result[3]}")
+                
+                if result[2] != "transferred":
+                    print(f"Warning: Batch not marked as transferred in database")
+            else:
+                print(f"Warning: Batch {params.batch_id} not found in database")
+        
+        # Write validation file
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        with open(output[0], 'w') as f:
+            f.write(f"Validated at {datetime.now().isoformat()}\n")
+            f.write(f"Batch: {params.batch_id}\n")
+        
+        # Update status to processing
+        update_batch_status(params.batch_id, "processing")
+
+# Rule: Convert RAW to DNG
+rule raw_to_dng:
+    input:
+        raw = "{ceres_base}/{batch}/{filename}.ARW",
+        validated = "{ceres_base}/{batch}/validated.txt"
+    output:
+        dng = temp("{ceres_base}/{batch}/{filename}.dng")
+    params:
+        matrix = MATRIX_PATH,
+        config = CONFIG_PATH,
+        batch_id = lambda w: w.batch,
+        filename = lambda w: w.filename
+    threads: 4
+    resources:
+        mem_mb = 16000,
+        runtime = 120
+    shell:
+        """
+        python3 {params.config} \
+            --raw-file {input.raw} \
+            --output-dng {output.dng} \
+            --matrix-file {params.matrix} \
+            --threads {threads}
+        """
+
+# Rule: Update database after DNG creation
+rule update_dng_status:
+    input:
+        dng = "{ceres_base}/{batch}/{filename}.dng"
+    output:
+        flag = temp("{ceres_base}/{batch}/.dng_status_{filename}")
+    params:
+        batch_id = lambda w: w.batch,
+        filename = lambda w: w.filename
+    run:
+        if db:
+            cursor = db.conn.cursor()
+            cursor.execute("""
+                UPDATE files 
+                SET dng_created = 1, 
+                    dng_path = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE batch_id = ? AND filename = ?
+            """, (str(input.dng), params.batch_id, params.filename + ".ARW"))
+            db.conn.commit()
+        
+        Path(output.flag).touch()
+
+# Rule: Convert DNG to JPG
+rule dng_to_jpg:
+    input:
+        dng = "{ceres_base}/{batch}/{filename}.dng",
+        dng_flag = "{ceres_base}/{batch}/.dng_status_{filename}"
+    output:
+        jpg = "{output_base}/{batch}/{filename}.jpg"
+    params:
+        pp3 = PP3_FILE,
+        rawtherapee = RAWTHERAPEE_CLI,
+        batch_id = lambda w: w.batch,
+        filename = lambda w: w.filename
+    threads: 4
+    resources:
+        mem_mb = 16000,
+        runtime = 120
+    shell:
+        """
+        mkdir -p $(dirname {output.jpg})
+        {params.rawtherapee} \
+            -o {output.jpg} \
+            -p {params.pp3} \
+            -c {input.dng} \
+            -j{threads}
+        """
+
+# Rule: Update database after JPG creation
+rule update_jpg_status:
+    input:
+        jpg = "{output_base}/{batch}/{filename}.jpg"
+    output:
+        flag = temp("{output_base}/{batch}/.jpg_status_{filename}")
+    params:
+        batch_id = lambda w: w.batch,
+        filename = lambda w: w.filename
+    run:
+        if db:
+            cursor = db.conn.cursor()
+            cursor.execute("""
+                UPDATE files 
+                SET jpg_created = 1, 
+                    jpg_path = ?,
+                    processing_status = 'completed',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE batch_id = ? AND filename = ?
+            """, (str(input.jpg), params.batch_id, params.filename + ".ARW"))
+            db.conn.commit()
+        
+        Path(output.flag).touch()
+
+# Rule: Cleanup temporary DNG files
+rule cleanup_dngs:
+    input:
+        jpgs = lambda w: expand("{output_base}/{batch}/{filename}.jpg",
+                               output_base=OUTPUT_BASE,
+                               batch=w.batch,
+                               filename=[f.replace(".ARW", "") for f in BATCH_FILES[w.batch]]),
+        jpg_flags = lambda w: expand("{output_base}/{batch}/.jpg_status_{filename}",
+                                    output_base=OUTPUT_BASE,
+                                    batch=w.batch,
+                                    filename=[f.replace(".ARW", "") for f in BATCH_FILES[w.batch]])
+    output:
+        flag = temp("{ceres_base}/{batch}/cleanup_done.txt")
+    params:
+        batch_dir = lambda w: CERES_BASE / w.batch
+    shell:
+        """
+        echo "Cleaning up DNG files for {wildcards.batch}"
+        rm -f {params.batch_dir}/*.dng
+        echo "Cleanup complete at $(date)" > {output.flag}
+        """
+
+# Rule: Create batch summary
+rule create_summary:
+    input:
+        jpgs = lambda w: expand("{output_base}/{batch}/{filename}.jpg",
+                               output_base=OUTPUT_BASE,
+                               batch=w.batch,
+                               filename=[f.replace(".ARW", "") for f in BATCH_FILES[w.batch]]),
+        cleanup = "{ceres_base}/{batch}/cleanup_done.txt"
+    output:
+        summary = "{output_base}/{batch}/processing_summary.txt"
+    params:
+        batch_id = lambda w: w.batch
+    run:
+        import glob
+        
+        batch_path = CERES_BASE / params.batch_id
+        output_path = OUTPUT_BASE / params.batch_id
+        
+        # Count files
+        raw_count = len(list(batch_path.glob("*.ARW")))
+        jpg_count = len(list(output_path.glob("*.jpg")))
+        
+        # Get file sizes
+        total_raw_size = sum(f.stat().st_size for f in batch_path.glob("*.ARW"))
+        total_jpg_size = sum(f.stat().st_size for f in output_path.glob("*.jpg"))
+        
+        # Write summary
+        with open(output.summary, 'w') as f:
+            f.write(f"Batch Processing Summary\n")
+            f.write(f"========================\n\n")
+            f.write(f"Batch ID: {params.batch_id}\n")
+            f.write(f"Processed: {datetime.now().isoformat()}\n\n")
+            f.write(f"Input Files:\n")
+            f.write(f"  RAW files: {raw_count}\n")
+            f.write(f"  Total size: {total_raw_size / 1024**3:.2f} GB\n\n")
+            f.write(f"Output Files:\n")
+            f.write(f"  JPG files: {jpg_count}\n")
+            f.write(f"  Total size: {total_jpg_size / 1024**3:.2f} GB\n\n")
+            f.write(f"Success rate: {jpg_count/raw_count*100:.1f}%\n\n")
+            
+            # Database info
+            if db:
+                cursor = db.conn.cursor()
+                cursor.execute("""
+                    SELECT ncsu_sync_status, transfer_status, processing_status
+                    FROM batches WHERE batch_id = ?
+                """, (params.batch_id,))
+                result = cursor.fetchone()
+                if result:
+                    f.write(f"Pipeline Status:\n")
+                    f.write(f"  NCSU sync: {result[0] or 'N/A'}\n")
+                    f.write(f"  JUNO→Ceres transfer: {result[1]}\n")
+                    f.write(f"  Processing: {result[2]}\n")
+
+# Rule: Finalize batch
+rule finalize_batch:
+    input:
+        summary = "{output_base}/{batch}/processing_summary.txt",
+        cleanup = "{ceres_base}/{batch}/cleanup_done.txt"
+    output:
+        done = "{output_base}/{batch}/done.txt"
+    params:
+        batch_id = lambda w: w.batch
+    run:
+        # Update database to completed
+        update_batch_status(params.batch_id, "completed")
+        
+        # Write completion marker
+        with open(output.done, 'w') as f:
+            f.write(f"Batch {params.batch_id} processing completed\n")
+            f.write(f"Completed at: {datetime.now().isoformat()}\n")
+            f.write(f"SLURM Job ID: {os.getenv('SLURM_JOB_ID', 'N/A')}\n")
+        
+        print(f"✅ Batch {params.batch_id} processing complete")
+
+# Error handling
+onerror:
+    # Update database with failure status
+    if BATCHES and db:
+        for batch in BATCHES:
+            update_batch_status(batch, "failed", error_msg=str(log))
+    
+    print(f"❌ Pipeline failed for batches: {BATCHES}")
+
+onsuccess:
+    print(f"✅ Pipeline completed successfully for {len(BATCHES)} batches")
+    if db:
+        db.close()

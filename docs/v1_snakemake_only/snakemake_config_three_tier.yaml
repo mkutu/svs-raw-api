@@ -1,0 +1,137 @@
+# Snakemake Configuration for Three-Tier Pipeline
+# NCSU → JUNO → Ceres → Process
+
+# Processing mode
+# - single: Process one specific batch (requires batch_id)
+# - batch: Process all batches that are ready (transferred to Ceres)
+mode: single
+
+# Batch ID (required for single mode)
+batch_id: ""
+
+# Optional state filter (e.g., "MD", "NC")
+# Only applies in batch mode
+state_filter: null
+
+# Storage paths
+paths:
+  # NCSU NFS storage (for reference only, not used in Snakemake)
+  ncsu_base_path: "/rsstu/users/[group]/semifield-upload"
+  
+  # JUNO archive (for reference only, not used in Snakemake)
+  juno_base_path: "/project/dash_agir/semifield-upload"
+  
+  # Ceres scratch space (input for processing)
+  ceres_base_path: "/90daydata/dash_agir/data/semifield-upload"
+  
+  # Output directory (final JPG files)
+  output_base: "/project/dash_agir/matthew.kutugata/semifield-developed-images"
+  
+  # Database for tracking
+  database_path: "/project/dash_agir/matthew.kutugata/pipeline_tracking.db"
+
+# Processing configuration
+processing:
+  # Calibration matrix for RAW conversion
+  matrix_path: "/home/matthew.kutugata/repos/svs-raw-api/data/profiles/MD_calibration_matrix_optimized.npy"
+  
+  # Configuration script for RAW → DNG
+  config_path: "/home/matthew.kutugata/repos/svs-raw-api/scripts/raw_to_dng.py"
+  
+  # RawTherapee profile for DNG → JPG
+  pp3_file: "/home/matthew.kutugata/repos/svs-raw-api/data/profiles/MD_shr661_raw16.pp3"
+  
+  # RawTherapee CLI executable
+  rawtherapee_cli: "rawtherapee-cli"
+
+# Resource allocation
+resources:
+  # Maximum parallel jobs (SLURM jobs)
+  max_jobs: 12
+  
+  # Cores per job
+  cores_per_job: 4
+  
+  # Memory per job (MB)
+  memory_per_job: 16000
+  
+  # Maximum runtime per job (minutes)
+  max_runtime: 120
+  
+  # Maximum parallel transfer jobs (for Globus operations)
+  max_transfer_jobs: 2
+
+# SLURM configuration
+slurm:
+  # Account to charge
+  account: "dash_agir"
+  
+  # Partition to use
+  partition: "short"
+  
+  # QOS (quality of service)
+  qos: "short"
+  
+  # Log directory
+  log_dir: "/project/dash_agir/matthew.kutugata/logs"
+
+# Three-tier validation
+validation:
+  # Check that batch has been transferred before processing
+  require_transferred: true
+  
+  # Check for minimum number of RAW files
+  min_raw_files: 1
+  
+  # Fail if database status doesn't match
+  strict_db_check: false
+
+# Cleanup options
+cleanup:
+  # Remove DNG files after JPG creation
+  remove_dngs: true
+  
+  # Remove RAW files from Ceres after processing
+  # WARNING: Only enable if RAW files are safely archived in JUNO
+  remove_raw_from_ceres: false
+  
+  # Keep processing logs
+  keep_logs: true
+
+# Notification (optional)
+notification:
+  # Email for job completion notifications
+  email: null
+  
+  # Slack webhook for notifications
+  slack_webhook: null
+
+# Performance tuning
+performance:
+  # Stage data to local TMPDIR on compute nodes
+  use_tmpdir: true
+  
+  # Compress DNG files (slower but saves space)
+  compress_dng: false
+  
+  # JPEG quality (1-100)
+  jpg_quality: 95
+
+# Retry configuration
+retry:
+  # Number of retries for failed jobs
+  max_retries: 3
+  
+  # Delay between retries (seconds)
+  retry_delay: 60
+
+# Database settings
+database:
+  # Update database during pipeline
+  enable_updates: true
+  
+  # Record file-level status
+  track_files: true
+  
+  # Export summary after completion
+  export_summary: true

@@ -1,0 +1,274 @@
+"""
+Snakemake Workflow for SVS RAW Image Processing
+Converts RAW → DNG → JPG in parallel on SCINet Ceres
+
+Usage:
+    snakemake --cores 4 --config batch_id=MD_2025-10-22
+"""
+
+import os
+from pathlib import Path
+import logging
+
+# Configuration
+configfile: "config/snakemake_config.yaml"
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("snakemake")
+
+# Get batch ID from config or command line
+BATCH_ID = config.get("batch_id", "")
+MODE = config.get("mode", "single")  # single or batch
+
+# Paths from config
+PATHS = config["paths"]
+PROCESSING = config["processing"]
+
+# Determine input directory based on mode
+if MODE == "single":
+    if not BATCH_ID:
+        raise ValueError("batch_id must be specified in single mode")
+    INPUT_DIR = Path(PATHS["ceres_scratch"]) / BATCH_ID
+    OUTPUT_BASE = Path(PATHS["output_base"]) / BATCH_ID
+elif MODE == "batch":
+    INPUT_DIR = Path(PATHS["ceres_scratch"])
+    OUTPUT_BASE = Path(PATHS["output_base"])
+else:
+    raise ValueError(f"Unknown mode: {MODE}")
+
+# Create output directories
+DNG_DIR = OUTPUT_BASE / "dngs"
+JPG_DIR = OUTPUT_BASE / "images"
+LOG_DIR = OUTPUT_BASE / "logs"
+
+# Find all RAW files
+if MODE == "single":
+    RAW_FILES = list(INPUT_DIR.glob("*.ARW"))
+    if not RAW_FILES:
+        RAW_FILES = list(INPUT_DIR.glob("*.RAW"))
+    BASENAMES = [f.stem for f in RAW_FILES]
+    logger.info(f"Processing single batch {BATCH_ID}: {len(RAW_FILES)} RAW files")
+elif MODE == "batch":
+    # Find all batches
+    batch_dirs = [d for d in INPUT_DIR.iterdir() if d.is_dir() and "_" in d.name]
+    RAW_FILES = []
+    for batch_dir in batch_dirs:
+        RAW_FILES.extend(list(batch_dir.glob("*.ARW")))
+        RAW_FILES.extend(list(batch_dir.glob("*.RAW")))
+    BASENAMES = [f.stem for f in RAW_FILES]
+    logger.info(f"Processing {len(batch_dirs)} batches: {len(RAW_FILES)} RAW files")
+
+if not RAW_FILES:
+    raise ValueError(f"No RAW files found in {INPUT_DIR}")
+
+# Final outputs
+rule all:
+    input:
+        dngs = expand(str(DNG_DIR / "{basename}.dng"), basename=BASENAMES),
+        jpgs = expand(str(JPG_DIR / "{basename}.jpg"), basename=BASENAMES),
+        summary = str(OUTPUT_BASE / "processing_summary.txt")
+
+# Convert RAW to DNG
+rule raw_to_dng:
+    input:
+        raw = lambda wildcards: next(f for f in RAW_FILES if f.stem == wildcards.basename)
+    output:
+        dng = DNG_DIR / "{basename}.dng"
+    params:
+        config_path = PATHS["svs_tags"],
+        matrix_path = PATHS["color_matrix"],
+        height = PROCESSING["height"],
+        width = PROCESSING["width"]
+    log:
+        LOG_DIR / "raw_to_dng_{basename}.log"
+    resources:
+        mem_mb = 8000,
+        runtime = 300  # 5 minutes
+    threads: 2
+    run:
+        import sys
+        import numpy as np
+        from pathlib import Path
+        
+        # Add svs_raw_api to path if needed
+        sys.path.insert(0, str(Path(PATHS["repo_root"]) / "src"))
+        
+        from svs_raw_api import SVSRaw2DNG, HEIGHT, WIDTH
+        
+        # Setup logging
+        import logging
+        logging.basicConfig(
+            filename=str(log[0]),
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        logger = logging.getLogger()
+        
+        try:
+            logger.info(f"Processing {input.raw}")
+            
+            # Load RAW image
+            raw_image = np.fromfile(input.raw, dtype=np.uint16).astype(np.uint16)
+            raw_image_16 = np.reshape(raw_image, (params.height, params.width))
+            
+            # Initialize converter
+            svs_dng = SVSRaw2DNG(
+                Path(params.config_path),
+                Path(params.matrix_path)
+            )
+            tags = svs_dng.define_tags()
+            
+            # Create output directory
+            Path(output.dng).parent.mkdir(parents=True, exist_ok=True)
+            
+            # Convert to DNG
+            dng_path_base = Path(output.dng).with_suffix('')
+            svs_dng.run(tags, Path(input.raw), raw_image_16, dng_path_base)
+            
+            logger.info(f"Created DNG: {output.dng}")
+            
+        except Exception as e:
+            logger.error(f"Failed to convert {input.raw}: {str(e)}")
+            raise
+
+# Convert DNG to JPG
+rule dng_to_jpg:
+    input:
+        dng = DNG_DIR / "{basename}.dng"
+    output:
+        jpg = JPG_DIR / "{basename}.jpg"
+    params:
+        pp3_profile = PATHS["pp3_profile"],
+        rt_cli = PATHS["rawtherapee_cli"],
+        threads = PROCESSING["threads_per_image"]
+    log:
+        LOG_DIR / "dng_to_jpg_{basename}.log"
+    resources:
+        mem_mb = 8000,
+        runtime = 300  # 5 minutes
+    threads: lambda wildcards: PROCESSING["threads_per_image"]
+    run:
+        import subprocess
+        import os
+        from pathlib import Path
+        import logging
+        
+        # Setup logging
+        logging.basicConfig(
+            filename=str(log[0]),
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        logger = logging.getLogger()
+        
+        try:
+            logger.info(f"Converting {input.dng} to JPG")
+            
+            # Create output directory
+            Path(output.jpg).parent.mkdir(parents=True, exist_ok=True)
+            
+            # RawTherapee command
+            cmd = [
+                str(params.rt_cli),
+                "-O", str(output.jpg),
+                "-p", str(params.pp3_profile),
+                "-j100",      # JPG quality 100
+                "-js3",       # JPG subsampling 4:4:4
+                "-Y",         # Overwrite
+                "-c", str(input.dng)
+            ]
+            
+            # Set environment
+            env = {
+                **os.environ,
+                "LANG": "en_US.UTF-8",
+                "OMP_NUM_THREADS": str(params.threads),
+                "OMP_DYNAMIC": "TRUE",
+                "OMP_NESTED": "FALSE"
+            }
+            
+            # Run conversion
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=300
+            )
+            
+            logger.info(f"Created JPG: {output.jpg}")
+            
+            # Optionally clean up DNG if configured
+            if PROCESSING.get("cleanup_dngs", False):
+                logger.info(f"Cleaning up {input.dng}")
+                Path(input.dng).unlink()
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to convert {input.dng}: {e.stderr}")
+            raise
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout converting {input.dng}")
+            raise
+        except Exception as e:
+            logger.error(f"Error converting {input.dng}: {str(e)}")
+            raise
+
+# Create processing summary
+rule create_summary:
+    input:
+        dngs = expand(str(DNG_DIR / "{basename}.dng"), basename=BASENAMES),
+        jpgs = expand(str(JPG_DIR / "{basename}.jpg"), basename=BASENAMES)
+    output:
+        summary = OUTPUT_BASE / "processing_summary.txt"
+    run:
+        import datetime
+        from pathlib import Path
+        
+        total_files = len(BASENAMES)
+        successful_dngs = len([f for f in input.dngs if Path(f).exists()])
+        successful_jpgs = len([f for f in input.jpgs if Path(f).exists()])
+        
+        with open(output.summary, 'w') as f:
+            f.write(f"Processing Summary\n")
+            f.write(f"==================\n\n")
+            f.write(f"Batch ID: {BATCH_ID}\n")
+            f.write(f"Mode: {MODE}\n")
+            f.write(f"Completed: {datetime.datetime.now()}\n\n")
+            f.write(f"Total RAW files: {total_files}\n")
+            f.write(f"Successful DNGs: {successful_dngs}/{total_files}\n")
+            f.write(f"Successful JPGs: {successful_jpgs}/{total_files}\n\n")
+            
+            if successful_jpgs == total_files:
+                f.write("Status: SUCCESS - All files processed\n")
+            else:
+                f.write("Status: PARTIAL - Some files failed\n")
+                failed = total_files - successful_jpgs
+                f.write(f"Failed: {failed} files\n")
+
+# Cleanup rule (optional)
+rule cleanup:
+    input:
+        summary = OUTPUT_BASE / "processing_summary.txt"
+    output:
+        touch(OUTPUT_BASE / "cleanup.done")
+    params:
+        cleanup_dngs = PROCESSING.get("cleanup_dngs", False),
+        cleanup_raw = PROCESSING.get("cleanup_raw", False)
+    run:
+        if params.cleanup_dngs:
+            logger.info("Cleaning up DNG files")
+            for dng in DNG_DIR.glob("*.dng"):
+                dng.unlink()
+        
+        if params.cleanup_raw:
+            logger.info("Cleaning up RAW files from scratch")
+            if MODE == "single":
+                for raw in INPUT_DIR.glob("*.ARW"):
+                    raw.unlink()
+                for raw in INPUT_DIR.glob("*.RAW"):
+                    raw.unlink()
