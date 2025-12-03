@@ -1,0 +1,90 @@
+# ============================================================================
+# SVS RAW Processing Pipeline Configuration
+# USDA SciNet HPC (Ceres)
+# ============================================================================
+
+# Batch to process (set via command line: --config batch_id=MD_2025-10-22)
+batch_id: ""
+
+# ============================================================================
+# Paths
+# ============================================================================
+paths:
+  # Repository root
+  repo_root: /home/matthew.kutugata/repos/svs-raw-api
+
+  # Input: Ceres scratch storage (90-day retention)
+  scratch_dir: /90daydata/dash_agir/data/semifield-upload
+
+  # Output: Permanent project storage
+  output_dir: /project/dash_agir/matthew.kutugata/semifield-developed-images
+
+  # Log directory (permanent)
+  logs_dir: /project/dash_agir/matthew.kutugata/logs
+
+  # SVS camera tags and calibration
+  svs_tags: /home/matthew.kutugata/repos/svs-raw-api/data/profiles/svs_tags.yaml
+  color_matrix: /home/matthew.kutugata/repos/svs-raw-api/data/profiles/MD_calibration_matrix_optimized.npy
+
+  # RawTherapee processing profile
+  pp3_profile: /home/matthew.kutugata/repos/svs-raw-api/data/profiles/MD_shr661_raw16.pp3
+
+  # RawTherapee CLI executable
+  # This can be overridden by RAWTHERAPEE_CLI environment variable
+  rawtherapee_cli: /home/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
+
+# ============================================================================
+# Processing Settings
+# ============================================================================
+processing:
+  # SVS camera image dimensions
+  height: 3024
+  width: 4032
+
+  # Threads per image for RawTherapee
+  threads_per_image: 4
+
+  # Whether to keep DNG files after JPG creation
+  # DNGs are ~18MB each, JPGs are ~2-3MB each
+  keep_dngs: true
+
+# ============================================================================
+# SLURM Resource Allocation
+# ============================================================================
+slurm:
+  # Account and partition
+  account: dash_agir
+  partition: short
+
+  # Per-job resources (each job processes one image)
+  cpus_per_job: 4
+  mem_per_job_mb: 16000
+  time_per_job_min: 30
+
+  # Maximum parallel jobs
+  # With 12 jobs: 48 cores, 192 GB RAM total
+  max_parallel_jobs: 12
+
+  # Cluster configuration
+  # This controls how Snakemake submits individual rules to SLURM
+  cluster_config:
+    __default__:
+      time: "00:30:00"
+      mem: 16000
+      cpus: 4
+      partition: short
+      account: dash_agir
+
+# ============================================================================
+# Advanced Settings
+# ============================================================================
+advanced:
+  # Use local /tmp for faster I/O during processing
+  # SLURM jobs copy data to /tmp, process, then copy back
+  use_tmp: true
+
+  # Retry failed jobs
+  restart_times: 1
+
+  # Keep intermediate files for debugging
+  keep_intermediate: false

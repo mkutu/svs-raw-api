@@ -1,0 +1,26 @@
+# SLURM Cluster Configuration for Snakemake
+# This file defines SLURM parameters for each rule
+
+__default__:
+  account: dash_agir
+  partition: short
+  time: "00:30:00"
+  cpus: 4
+  mem: 16000
+  output: /project/dash_agir/matthew.kutugata/logs/slurm-%j.out
+  error: /project/dash_agir/matthew.kutugata/logs/slurm-%j.err
+
+raw_to_dng:
+  time: "00:30:00"
+  cpus: 4
+  mem: 16000
+
+dng_to_jpg:
+  time: "00:30:00"
+  cpus: 4
+  mem: 16000
+
+create_summary:
+  time: "00:05:00"
+  cpus: 1
+  mem: 2000

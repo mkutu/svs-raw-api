@@ -1,0 +1,40 @@
+# Snakemake SLURM Profile for SciNet Ceres
+# Use with: snakemake --profile config/slurm
+
+# Cluster submission
+cluster: "sbatch --account={cluster.account} --partition={cluster.partition} --time={cluster.time} --cpus-per-task={cluster.cpus} --mem={cluster.mem}MB --output={cluster.output} --error={cluster.error}"
+cluster-config: "config/cluster.yaml"
+
+# Job limits
+jobs: 12
+max-jobs-per-second: 2
+max-status-checks-per-second: 1
+
+# Restart failed jobs once
+restart-times: 1
+
+# Keep going if a job fails
+keep-going: true
+
+# Use conda environments
+use-conda: true
+conda-frontend: mamba
+
+# Resource management
+resources:
+  - mem_mb=200000
+
+# Latency wait (seconds to wait for output files)
+latency-wait: 60
+
+# Print shell commands
+printshellcmds: true
+
+# Detailed reason for rule execution
+reason: true
+
+# Show job stats
+show-failed-logs: true
+
+# Rerun incomplete jobs
+rerun-incomplete: true
