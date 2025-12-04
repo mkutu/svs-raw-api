@@ -1,0 +1,52 @@
+# config/snakemake_config.yaml
+# Snakemake Configuration for SVS RAW Processing Pipeline
+# USDA SCINet Ceres HPC
+
+# Processing mode
+mode: single  # Only 'single' batch mode supported
+batch_id: "MD_2025-09-09"  # Set via command line: --config batch_id=MD_2025-10-22
+
+# Paths - SCINet Ceres specific
+paths:
+  # Repository root
+  repo_root: /home/matthew.kutugata/repos/svs-raw-api
+  
+  # Storage locations
+  ceres_scratch: /90daydata/dash_agir/data/semifield-upload  # Input (90-day scratch)
+  output_base: /project/dash_agir/matthew.kutugata/semifield-developed-images  # Output (permanent)
+  
+  # Processing profiles
+  svs_tags: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/svs_tags.yaml
+  color_matrix: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_calibration_matrix_optimized.npy
+  pp3_profile: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_shr661_raw16.pp3
+  
+  # RawTherapee CLI (validated by validate_rawtherapee.sh)
+  rawtherapee_cli: /home/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
+
+# Image processing parameters
+processing:
+  width: 13376
+  height: 9528
+  threads_per_image: 4  # Threads per conversion task
+  cleanup_dngs: true   # Keep DNGs after creating JPGs (recommended: false for archival)
+  cleanup_raws: false  # Keep RAWs after DNG conversion (recommended: true to save space)
+
+# Database tracking (optional)
+database:
+  path: /project/dash_agir/matthew.kutugata/pipeline_tracking.db
+  enabled: true
+
+# SLURM resource allocation
+slurm:
+  partition: short
+  account: dash_agir
+  time: "04:00:00"
+  mem_per_cpu: 32GB
+  cpus_per_task: 4
+  ntasks: 1
+  max_parallel_jobs: 12  # Maximum concurrent image processing jobs
+
+# Logging configuration
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

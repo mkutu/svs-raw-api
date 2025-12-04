@@ -1,0 +1,558 @@
+# ======================================================================
+# Snakefile
+# SVS RAW Image Processing Pipeline — Snakemake Workflow
+#
+# Automated RAW → DNG → JPG conversion for USDA SCINet (Ceres)
+#
+# Usage:
+#     snakemake --cores 4 --config batch_id=MD_2025-10-22
+#     snakemake --profile config/slurm_profile
+# ======================================================================
+
+import logging
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# ----------------------------------------------------------------------
+# Configuration File
+# ----------------------------------------------------------------------
+configfile: "config/scinet.yaml"
+
+# ----------------------------------------------------------------------
+# Globus Manager for NCSU → JUNO transfers
+# ----------------------------------------------------------------------
+GLOBUS_MANAGER_SCRIPT = Path(config.get("paths", {}).get("globus_manager", 
+                                                          "scripts/globus_manager.py"))
+
+# ----------------------------------------------------------------------
+# Logging Setup
+# ----------------------------------------------------------------------
+logging.basicConfig(
+    level=getattr(logging, config.get("logging", {}).get("level", "INFO")),
+    format=config.get("logging", {}).get("format",
+                                         "%(asctime)s - %(levelname)s - %(message)s"),
+)
+logger = logging.getLogger("svs_pipeline")
+
+# ----------------------------------------------------------------------
+# Mode & Batch ID
+# ----------------------------------------------------------------------
+BATCH_ID = config.get("batch_id", "")
+MODE = config.get("mode", "single")
+
+if MODE == "single" and not BATCH_ID:
+    raise ValueError("batch_id must be provided in single mode via --config batch_id=<ID>")
+
+# ----------------------------------------------------------------------
+# Paths & Processing Config
+# ----------------------------------------------------------------------
+PATHS = config["paths"]
+PROCESSING = config["processing"]
+
+if MODE == "single":
+    INPUT_DIR = Path(PATHS["ceres_scratch"]) / BATCH_ID
+    OUTPUT_BASE = Path(PATHS["output_base"]) / BATCH_ID
+    OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
+else:
+    raise ValueError("Only 'single' mode is currently supported")
+
+# Output structure
+DNG_DIR = OUTPUT_BASE / "dngs"
+JPG_DIR = OUTPUT_BASE / "images"
+LOG_DIR = OUTPUT_BASE / "logs"
+
+# ----------------------------------------------------------------------
+# RAW Discovery
+# ----------------------------------------------------------------------
+RAW_FILES = list(INPUT_DIR.glob("*.RAW"))
+if not RAW_FILES:
+    raise FileNotFoundError(f"No RAW files found in {INPUT_DIR}")
+
+BASENAMES = [f.stem for f in RAW_FILES]
+logger.info(f"Found {len(BASENAMES)} RAW files in batch {BATCH_ID}")
+
+# ----------------------------------------------------------------------
+# Required Supporting Files
+# ----------------------------------------------------------------------
+SVS_TAGS    = Path(PATHS["svs_tags"])
+COLOR_MATRIX = Path(PATHS["color_matrix"])
+PP3_PROFILE  = Path(PATHS["pp3_profile"])
+RT_CLI_PATH  = Path(PATHS["rawtherapee_cli"])
+
+for f in [SVS_TAGS, COLOR_MATRIX, PP3_PROFILE, RT_CLI_PATH]:
+    if not f.exists():
+        raise FileNotFoundError(f"Required file missing: {f}")
+
+# ======================================================================
+# RULE: All
+# ======================================================================
+rule all:
+    input:
+        "logs/ncsu_missing_batches.json",  # ← Add this line
+        expand(str(JPG_DIR / "{basename}.jpg"), basename=BASENAMES),
+        OUTPUT_BASE / "processing_summary.txt"
+
+# ======================================================================
+# RULE: Check NCSU for Missing Batches
+# ======================================================================
+rule check_ncsu_missing:
+    """
+    Check if there are batches in NCSU NFS that need to be synced to JUNO.
+    This is an optional preliminary step to identify data that needs archiving.
+    
+    Usage:
+        snakemake check_ncsu_missing --cores 1
+        snakemake check_ncsu_missing --config state=MD  # Filter by state
+    """
+    output:
+        report = "logs/ncsu_missing_batches.txt",
+        json = "logs/ncsu_missing_batches.json"
+    params:
+        state_filter = config.get("state", None),
+        globus_script = GLOBUS_MANAGER_SCRIPT
+    log:
+        "logs/ncsu_check.log"
+    run:
+        import json as json_module
+        import subprocess
+        
+        # Ensure log directory exists
+        Path("logs").mkdir(parents=True, exist_ok=True)
+        
+        logger.info("🔍 Checking NCSU for missing batches...")
+        
+        # Build command
+        cmd = ["python3", str(params.globus_script), "check-missing"]
+        if params.state_filter:
+            cmd.extend(["--state", params.state_filter])
+        
+        try:
+            # Run the globus manager check
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            # Save full output to log
+            with open(log[0], 'w') as f:
+                f.write("STDOUT:\n")
+                f.write(result.stdout)
+                f.write("\n\nSTDERR:\n")
+                f.write(result.stderr)
+            
+            # Parse the output to extract batch information
+            missing_batches = []
+            lines = result.stdout.split('\n')
+            
+            # Look for batch lines (format: "   • BATCH_ID (DATE)")
+            in_missing_section = False
+            for line in lines:
+                if "Batches in NCSU but not in JUNO:" in line:
+                    in_missing_section = True
+                    continue
+                
+                if in_missing_section and line.strip().startswith('•'):
+                    # Parse line like "   • MD_2025-10-22 (2025-10-22)"
+                    batch_info = line.strip()[2:].split('(')[0].strip()
+                    if batch_info:
+                        missing_batches.append(batch_info)
+            
+            # Create detailed report
+            report_content = f"""
+{'='*70}
+NCSU → JUNO Missing Batches Report
+{'='*70}
+
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+State Filter: {params.state_filter or 'All states'}
+
+{'='*70}
+
+{result.stdout}
+
+{'='*70}
+SUMMARY
+{'='*70}
+Total batches missing in JUNO: {len(missing_batches)}
+
+"""
+            if missing_batches:
+                report_content += "Batches to sync:\n"
+                for batch in missing_batches:
+                    report_content += f"  - {batch}\n"
+                report_content += "\n"
+                report_content += "Next steps:\n"
+                report_content += "  1. Sync individual batch:\n"
+                report_content += f"     python3 {params.globus_script} sync-to-juno --batch-id <BATCH_ID>\n"
+                report_content += "  2. Sync all missing batches:\n"
+                report_content += f"     python3 {params.globus_script} full-sync\n"
+            else:
+                report_content += "✅ All NCSU batches are already archived in JUNO\n"
+            
+            report_content += "\n" + "="*70 + "\n"
+            
+            # Write text report
+            with open(output.report, 'w') as f:
+                f.write(report_content)
+            
+            # Write JSON report for programmatic access
+            json_data = {
+                "timestamp": datetime.now().isoformat(),
+                "state_filter": params.state_filter,
+                "missing_batches": missing_batches,
+                "count": len(missing_batches)
+            }
+            with open(output.json, 'w') as f:
+                json_module.dump(json_data, f, indent=2)
+            
+            logger.info(f"✅ Check complete: {len(missing_batches)} batches missing in JUNO")
+            logger.info(f"   Report: {output.report}")
+            logger.info(f"   JSON:   {output.json}")
+            
+            if missing_batches:
+                logger.warning(f"⚠️  {len(missing_batches)} batches need to be synced to JUNO")
+                for batch in missing_batches[:5]:  # Show first 5
+                    logger.info(f"      • {batch}")
+                if len(missing_batches) > 5:
+                    logger.info(f"      ... and {len(missing_batches) - 5} more")
+        
+        except subprocess.TimeoutExpired:
+            logger.error("❌ NCSU check timed out after 5 minutes")
+            with open(output.report, 'w') as f:
+                f.write("ERROR: Check timed out\n")
+            with open(output.json, 'w') as f:
+                json_module.dump({"error": "timeout", "missing_batches": []}, f)
+            raise
+        
+        except Exception as e:
+            logger.error(f"❌ NCSU check failed: {e}")
+            with open(output.report, 'w') as f:
+                f.write(f"ERROR: {e}\n")
+            with open(output.json, 'w') as f:
+                json_module.dump({"error": str(e), "missing_batches": []}, f)
+            raise
+
+
+# ======================================================================
+# RULE: Sync Batch from NCSU to JUNO
+# ======================================================================
+rule sync_ncsu_to_juno:
+    """
+    Sync a specific batch from NCSU to JUNO archive.
+    
+    Usage:
+        snakemake sync_ncsu_to_juno --config batch_id=MD_2025-10-22
+    """
+    output:
+        status = "logs/ncsu_sync_{batch_id}.txt"
+    params:
+        batch_id = lambda wildcards: wildcards.batch_id,
+        globus_script = GLOBUS_MANAGER_SCRIPT
+    log:
+        "logs/ncsu_sync_{batch_id}.log"
+    run:
+        import subprocess
+        
+        logger.info(f"📤 Syncing {params.batch_id} from NCSU → JUNO...")
+        
+        cmd = [
+            "python3", str(params.globus_script),
+            "sync-to-juno",
+            "--batch-id", params.batch_id
+        ]
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minute timeout for transfer submission
+            )
+            
+            # Save full output
+            with open(log[0], 'w') as f:
+                f.write("STDOUT:\n")
+                f.write(result.stdout)
+                f.write("\n\nSTDERR:\n")
+                f.write(result.stderr)
+                f.write(f"\n\nReturn code: {result.returncode}\n")
+            
+            # Create status file
+            status_content = f"""
+{'='*70}
+NCSU → JUNO Sync Status: {params.batch_id}
+{'='*70}
+
+Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Batch ID: {params.batch_id}
+
+{'='*70}
+OUTPUT
+{'='*70}
+{result.stdout}
+
+{'='*70}
+"""
+            if result.returncode == 0:
+                status_content += "✅ Transfer submitted successfully\n"
+                status_content += "\nMonitor transfer status:\n"
+                # Try to extract task ID from output
+                for line in result.stdout.split('\n'):
+                    if 'task_id' in line or 'Transfer submitted:' in line:
+                        status_content += f"  {line}\n"
+            else:
+                status_content += f"❌ Transfer submission failed (exit code: {result.returncode})\n"
+                if result.stderr:
+                    status_content += f"\nError:\n{result.stderr}\n"
+            
+            with open(output.status, 'w') as f:
+                f.write(status_content)
+            
+            if result.returncode == 0:
+                logger.info(f"✅ Sync initiated for {params.batch_id}")
+            else:
+                logger.error(f"❌ Sync failed for {params.batch_id}")
+                raise subprocess.CalledProcessError(result.returncode, cmd)
+        
+        except subprocess.TimeoutExpired:
+            logger.error(f"❌ Sync submission timed out for {params.batch_id}")
+            with open(output.status, 'w') as f:
+                f.write(f"ERROR: Sync submission timed out\n")
+            raise
+        
+        except Exception as e:
+            logger.error(f"❌ Sync failed: {e}")
+            with open(output.status, 'w') as f:
+                f.write(f"ERROR: {e}\n")
+            raise
+
+# ======================================================================
+# RULE: Convert RAW → DNG
+# ======================================================================
+rule convert_raw_to_dng:
+    """Convert SVS RAW to Adobe DNG with custom color calibration."""
+    input:
+        raw = INPUT_DIR / "{basename}.RAW"
+    output:
+        dng = DNG_DIR / "{basename}.dng"
+    params:
+        svs_tags     = SVS_TAGS,
+        color_matrix = COLOR_MATRIX,
+        height       = PROCESSING["height"],
+        width        = PROCESSING["width"],
+        threads      = PROCESSING["threads_per_image"],
+    threads: PROCESSING["threads_per_image"]
+    resources:
+        mem_mb = config.get("slurm", {}).get("mem_per_cpu", "4GB").replace("GB", "000"),
+        runtime = 15
+    log:
+        LOG_DIR / "raw_to_dng_{basename}.log"
+    run:
+        # Ensure directories exist
+        DNG_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Load conversion modules
+        sys.path.insert(0, str(Path(PATHS["repo_root"]) / "src"))
+        try:
+            from svs_raw_api import SVSRaw2DNG
+            import numpy as np
+            import yaml
+
+            logger.info(f"[RAW→DNG] {wildcards.basename}")
+
+            # Load tags + color matrix
+            with open(params.svs_tags) as f:
+                svs_tags = yaml.safe_load(f)
+            color_mtx = np.load(params.color_matrix, allow_pickle=True)
+
+            # Load RAW image
+            raw_arr = np.fromfile(input.raw, dtype=np.uint16)
+            raw_img = raw_arr.reshape((params.height, params.width))
+
+            # Convert
+            converter = SVSRaw2DNG(color_matrix=color_mtx)
+            converter.save_dng(
+                raw_image   = raw_img,
+                output_path = str(output.dng),
+                camera_tags = svs_tags,
+            )
+
+            logger.info(f"✓ DNG created: {output.dng}")
+
+        except Exception as e:
+            logger.error(f"RAW→DNG failed: {input.raw} — {e}")
+            open(log[0], 'w').write(f"ERROR: {e}\n")
+            raise
+
+
+# ======================================================================
+# RULE: Convert DNG → JPG
+# ======================================================================
+rule convert_dng_to_jpg:
+    """Convert DNG to JPG using RawTherapee with custom PP3 profile."""
+    input:
+        dng = DNG_DIR / "{basename}.dng"
+    output:
+        jpg = JPG_DIR / "{basename}.jpg"
+    params:
+        pp3_profile = PP3_PROFILE,
+        rawtherapee = RT_CLI_PATH,
+        threads     = PROCESSING["threads_per_image"],
+    threads: PROCESSING["threads_per_image"]
+    resources:
+        mem_mb = config.get("slurm", {}).get("mem_per_cpu", "4GB").replace("GB", "000"),
+        runtime = 15
+    log:
+        LOG_DIR / "dng_to_jpg_{basename}.log"
+    run:
+        JPG_DIR.mkdir(parents=True, exist_ok=True)
+
+        try:
+            logger.info(f"[DNG→JPG] {wildcards.basename}")
+
+            cmd = [
+                str(params.rawtherapee),
+                "-O", str(output.jpg),
+                "-p", str(params.pp3_profile),
+                "-j100", "-js3", "-Y",
+                "-c", str(input.dng)
+            ]
+
+            env = {
+                **os.environ,
+                "OMP_NUM_THREADS": str(params.threads),
+                "OMP_DYNAMIC": "TRUE",
+                "LANG": "en_US.UTF-8",
+            }
+
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=300,
+            )
+
+            logger.info(f"✓ JPG created: {output.jpg}")
+
+            # Optional cleanup
+            if PROCESSING.get("cleanup_dngs", False):
+                Path(input.dng).unlink(missing_ok=True)
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"RawTherapee error: {e.stderr}")
+            open(log[0], 'w').write(f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}\n")
+            raise
+
+        except Exception as e:
+            logger.error(f"DNG→JPG failed: {e}")
+            open(log[0], 'w').write(f"ERROR: {e}\n")
+            raise
+
+
+# ======================================================================
+# RULE: Summary Report
+# ======================================================================
+rule create_summary:
+    """Generate summary report after conversion completes."""
+    input:
+        jpgs = expand(str(JPG_DIR / "{basename}.jpg"), basename=BASENAMES)
+    output:
+        summary = OUTPUT_BASE / "processing_summary.txt"
+    run:
+        jpgs = [Path(f) for f in input.jpgs if Path(f).exists()]
+
+        summary = f"""
+======================================================================
+SVS RAW Processing Pipeline — Batch Summary
+======================================================================
+
+Batch ID:        {BATCH_ID}
+Processed:       {datetime.now():%Y-%m-%d %H:%M:%S}
+
+RAW count:       {len(BASENAMES)}
+JPG count:       {len(jpgs)} / {len(BASENAMES)}  ({len(jpgs)/len(BASENAMES)*100:.1f}%)
+
+Output:          {OUTPUT_BASE}
+JPG directory:   {JPG_DIR}
+Log directory:   {LOG_DIR}
+
+Image size:      {PROCESSING['height']}×{PROCESSING['width']}
+Threads/image:   {PROCESSING['threads_per_image']}
+Color matrix:    {COLOR_MATRIX.name}
+PP3 profile:     {PP3_PROFILE.name}
+Cleanup DNGs:    {PROCESSING.get('cleanup_dngs', False)}
+
+======================================================================
+"""
+        # Error checking
+        errors = [
+            lf.name
+            for lf in LOG_DIR.glob("*.log")
+            if ("ERROR" in lf.read_text() or "FAILED" in lf.read_text())
+        ]
+
+        if errors:
+            summary += f"⚠️ Errors detected: {len(errors)}\n"
+            summary += "\n".join(f" - {e}" for e in errors[:10])
+        else:
+            summary += "✓ No errors detected.\n"
+
+        Path(output.summary).write_text(summary)
+        logger.info(summary)
+
+
+# ======================================================================
+# RULE: Cleanup
+# ======================================================================
+rule cleanup:
+    input:
+        OUTPUT_BASE / "processing_summary.txt"
+    output:
+        touch(OUTPUT_BASE / "cleanup.done")
+    params:
+        cleanup_dngs = PROCESSING.get("cleanup_dngs", False)
+    run:
+        if params.cleanup_dngs:
+            for d in DNG_DIR.glob("*.dng"):
+                d.unlink()
+
+
+# ======================================================================
+# Optional: Database Integration
+# ======================================================================
+try:
+    from scripts.db_manager import BatchDatabase
+
+    rule update_database:
+        input:
+            OUTPUT_BASE / "processing_summary.txt"
+        output:
+            touch(OUTPUT_BASE / ".database_updated")
+        params:
+            batch_id = BATCH_ID,
+            db_path = config.get("database", {}).get("path", None)
+        run:
+            db_path = params.db_path
+            if db_path and Path(db_path).exists():
+                try:
+                    db = BatchDatabase(db_path)
+                    db.update_batch_status(
+                        batch_id=params.batch_id,
+                        processing_status="completed",
+                        notes=f"Processed {len(BASENAMES)} images",
+                    )
+                    logger.info(f"Database updated for batch {params.batch_id}")
+                except Exception as e:
+                    logger.warning(f"Database update failed: {e}")
+            else:
+                logger.info("No database configured.")
+except ImportError:
+    logger.info("Database integration unavailable.")

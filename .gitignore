@@ -10,6 +10,9 @@ sampled_jpgs/
 # Logs
 logs/
 
+# snakemake
+.snakemake/
+
 # Notebooks
 notebooks/.ipynb_checkpoints/
 

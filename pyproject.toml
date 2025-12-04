@@ -38,6 +38,7 @@ dependencies = [
     "pydantic>=2.12.4",
     "matplotlib>=3.10.7",
     "pidng>=4.0.9",
+    "snakemake>=7.32.0",
 ]
 
 [project.optional-dependencies]

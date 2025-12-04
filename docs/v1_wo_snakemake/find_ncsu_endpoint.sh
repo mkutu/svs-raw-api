@@ -49,7 +49,7 @@ if [ -z "$endpoints" ] || [ "$endpoints" == "[]" ]; then
 fi
 
 # Parse and display endpoints
-echo "$endpoints" | jq -r '.[] | "ID: \(.id)\nName: \(.display_name)\nOwner: \(.owner_string)\n"'
+# echo "$endpoints" | jq -r '.[] | "ID: \(.id)\nName: \(.display_name)\nOwner: \(.owner_string)\n"'
 
 echo ""
 echo -e "${CYAN}📝 Common NC State Endpoints:${NC}"

@@ -1,0 +1,333 @@
+# Three-Tier Pipeline Architecture
+
+## Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        THREE-TIER STORAGE SYSTEM                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+                             DATA FLOW
+
+┌──────────────┐                    ┌──────────────┐
+│  Field Site  │                    │   Commands   │
+│   (Upload)   │                    │              │
+└──────┬───────┘                    │  Discover:   │
+       │                            │  • check-    │
+       │ Manual upload              │    missing   │
+       ▼                            │  • sync      │
+┌──────────────────────────┐       │  • sync-all  │
+│     TIER 1: NCSU NFS     │◄──────┤              │
+│  Research Storage        │       │  Transfer:   │
+│  (Primary Collection)    │       │  • transfer  │
+│                          │       │              │
+│  Path: /rsstu/users/     │       │  Process:    │
+│        [group]/          │       │  • process   │
+│        semifield-upload/ │       │  • full-     │
+│                          │       │    pipeline  │
+│  • Easy access for       │       └──────────────┘
+│    field equipment       │
+│  • Fast local uploads    │
+│  • Project-level storage │
+└────────┬─────────────────┘
+         │
+         │ Globus Transfer
+         │ (Automated via workflow.sh sync)
+         │ Status: ncsu_sync_status
+         │
+         ▼
+┌──────────────────────────┐
+│   TIER 2: JUNO LTS       │
+│  Long-term Archive       │
+│  (Permanent Storage)     │
+│                          │
+│  Path: /project/         │
+│        dash_agir/        │
+│        semifield-upload/ │
+│                          │
+│  • Reliable backup       │
+│  • Large capacity        │
+│  • Permanent retention   │
+└────────┬─────────────────┘
+         │
+         │ Globus Transfer
+         │ (Automated via workflow.sh transfer)
+         │ Status: transfer_status
+         │
+         ▼
+┌──────────────────────────┐
+│   TIER 3: Ceres Scratch  │
+│  /90daydata Processing   │
+│  (Fast Scratch Space)    │
+│                          │
+│  Path: /90daydata/       │
+│        dash_agir/data/   │
+│        semifield-upload/ │
+│                          │
+│  • High-speed access     │
+│  • Close to compute      │
+│  • 90-day retention      │
+└────────┬─────────────────┘
+         │
+         │ Snakemake Pipeline
+         │ (SLURM jobs on compute nodes)
+         │ Status: processing_status
+         │
+         ▼
+┌──────────────────────────┐
+│  PROCESSING ON CERES     │
+│  Compute Nodes           │
+│                          │
+│  1. RAW → DNG (parallel) │
+│  2. DNG → JPG (parallel) │
+│  3. Cleanup DNGs         │
+│                          │
+│  • 12 parallel jobs      │
+│  • 4 cores per job       │
+│  • 16GB RAM per job      │
+└────────┬─────────────────┘
+         │
+         │ Copy final outputs
+         │ (JPG files)
+         │
+         ▼
+┌──────────────────────────┐
+│  FINAL OUTPUTS           │
+│  Project Directory       │
+│                          │
+│  Path: /project/         │
+│        dash_agir/        │
+│        matthew.kutugata/ │
+│        semifield-        │
+│        developed-images/ │
+│                          │
+│  • Organized by batch    │
+│  • Ready for analysis    │
+│  • Permanent storage     │
+└──────────────────────────┘
+```
+
+## Status Tracking Through Pipeline
+
+```
+Database: pipeline_tracking.db
+
+┌────────────────────────────────────────────────────────────┐
+│                     BATCHES TABLE                          │
+├────────────────────────────────────────────────────────────┤
+│ batch_id: MD_2025-10-22                                    │
+│                                                            │
+│ Storage Paths:                                             │
+│   ncsu_path:  /rsstu/users/group/semifield-upload/...     │
+│   juno_path:  /project/dash_agir/semifield-upload/...     │
+│   ceres_path: /90daydata/dash_agir/data/semifield-upload/ │
+│                                                            │
+│ Status Progression:                                        │
+│   ncsu_sync_status:   unknown → needed → syncing → synced │
+│   transfer_status:    pending → transferring → transferred│
+│   processing_status:  pending → processing → completed     │
+│                                                            │
+│ Timestamps:                                                │
+│   discovered_at:              2025-10-22 08:00:00         │
+│   ncsu_synced_at:            2025-10-22 08:15:00         │
+│   transferred_at:            2025-10-22 08:30:00         │
+│   processing_completed_at:   2025-10-22 09:15:00         │
+└────────────────────────────────────────────────────────────┘
+```
+
+## Workflow Commands Mapped to Tiers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              COMMAND                    TIER AFFECTED        │
+├─────────────────────────────────────────────────────────────┤
+│ check-missing                          NCSU + JUNO          │
+│   → Scans NCSU and JUNO                                     │
+│   → Identifies missing batches                              │
+│                                                             │
+│ sync <BATCH_ID>                        NCSU → JUNO          │
+│   → Globus transfer                                         │
+│   → Updates ncsu_sync_status                                │
+│                                                             │
+│ sync-all                               NCSU → JUNO (bulk)   │
+│   → Multiple Globus transfers                               │
+│   → Batch sync operations                                   │
+│                                                             │
+│ transfer <BATCH_ID>                    JUNO → Ceres         │
+│   → Globus transfer                                         │
+│   → Updates transfer_status                                 │
+│                                                             │
+│ process <BATCH_ID>                     Ceres (compute)      │
+│   → SLURM job submission                                    │
+│   → Snakemake pipeline                                      │
+│   → Updates processing_status                               │
+│                                                             │
+│ full-pipeline <BATCH_ID>               All Tiers           │
+│   → Checks NCSU sync need                                   │
+│   → Transfers if needed                                     │
+│   → Processes on compute                                    │
+│   → Complete automation                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Globus Endpoints
+
+```
+NCSU Endpoint:  [User-configured]
+   └─> Display Name: NC State Research Storage
+       Path: /rsstu/users/[group]/semifield-upload
+
+JUNO Endpoint:  904c2108-90cf-11e8-9672-0a6d4e044368
+   └─> Display Name: BNL SDCC Juno
+       Path: /project/dash_agir/semifield-upload
+
+Ceres Endpoint: f45a24f8-09ba-11ec-b342-1feaf93e3729
+   └─> Display Name: USDA Ceres
+       Path: /90daydata/dash_agir/data/semifield-upload
+```
+
+## Database Tables
+
+```
+┌─────────────────────────┐
+│  batches                │  Main tracking
+│  - batch_id (PK)        │
+│  - ncsu_path            │  ← New field
+│  - juno_path            │
+│  - ceres_path           │
+│  - ncsu_sync_status     │  ← New field
+│  - transfer_status      │
+│  - processing_status    │
+│  - timestamps...        │
+└───────┬─────────────────┘
+        │
+        ├─────────────────────────────┐
+        │                             │
+┌───────▼─────────────┐   ┌───────────▼──────────────┐
+│  ncsu_sync_history  │   │  transfer_history        │
+│  - batch_id (FK)    │   │  - batch_id (FK)         │
+│  - globus_task_id   │   │  - globus_task_id        │
+│  - status           │   │  - status                │
+│  - bytes_transferred│   │  - bytes_transferred     │
+│  - timestamps...    │   │  - timestamps...         │
+└─────────────────────┘   └──────────────────────────┘
+        │                             │
+        └──────────────┬──────────────┘
+                       │
+           ┌───────────▼──────────────┐
+           │  processing_history      │
+           │  - batch_id (FK)         │
+           │  - job_id                │
+           │  - status                │
+           │  - files_processed       │
+           │  - timestamps...         │
+           └──────────────────────────┘
+```
+
+## Parallel Processing Architecture
+
+```
+Ceres Compute Nodes
+
+┌─────────────────────────────────────────────────────────────┐
+│                    SLURM Job Scheduler                      │
+└─────────────────────────────────────────────────────────────┘
+           │
+           │ sbatch run_snakemake_enhanced.sh
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────┐
+│               Snakemake Workflow Manager                    │
+│                                                             │
+│  Dynamic DAG generation:                                    │
+│  • Discovers all RAW files in batch                         │
+│  • Creates conversion tasks                                 │
+│  • Manages dependencies                                     │
+│  • Handles failures and retries                             │
+└─────────────────────────────────────────────────────────────┘
+           │
+           │ Spawns up to 12 parallel jobs
+           │
+    ┌──────┴──────┬──────┬──────┬──────┬──────┐
+    │             │      │      │      │      │
+    ▼             ▼      ▼      ▼      ▼      ▼
+┌────────┐   ┌────────┐   ...  (12 jobs total)
+│ Job 1  │   │ Job 2  │
+│ 4 cores│   │ 4 cores│   Each job:
+│ 16GB   │   │ 16GB   │   • RAW → DNG (Python)
+│        │   │        │   • DNG → JPG (RawTherapee)
+│ Process│   │ Process│   • Updates database
+│ 1 image│   │ 1 image│   • Cleans up files
+└────────┘   └────────┘
+
+Total Resources at Peak:
+• 48 CPU cores
+• 192 GB RAM
+• Processes 12 images simultaneously
+```
+
+## Performance Metrics
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    TIMING BREAKDOWN                        │
+│                  (100-image batch)                         │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  Discovery (check-missing)           < 1 minute           │
+│  ├─ Scan NCSU                        30 seconds          │
+│  ├─ Scan JUNO                        30 seconds          │
+│  └─ Compare lists                    instant              │
+│                                                            │
+│  NCSU → JUNO Sync                    10-30 minutes        │
+│  ├─ Globus transfer setup            10 seconds          │
+│  ├─ Data transfer (20GB)             10-30 minutes       │
+│  └─ Verification                     automatic            │
+│                                                            │
+│  JUNO → Ceres Transfer              5-10 minutes         │
+│  ├─ Globus transfer setup            10 seconds          │
+│  ├─ Data transfer (20GB)             5-10 minutes        │
+│  └─ Verification                     automatic            │
+│                                                            │
+│  Processing (RAW → DNG → JPG)        20-30 minutes        │
+│  ├─ RAW → DNG (parallel)             10-15 minutes       │
+│  ├─ DNG → JPG (parallel)             10-15 minutes       │
+│  └─ Cleanup + finalize               1 minute             │
+│                                                            │
+│  ─────────────────────────────────────────────────────    │
+│  TOTAL PIPELINE TIME                 40-60 minutes        │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+## File Organization
+
+```
+Repository Structure:
+
+~/repos/svs-raw-api/
+│
+├── scripts/                      Command-line tools
+│   ├── globus_manager.py         Globus operations
+│   ├── db_manager.py             Database management
+│   ├── workflow.sh               Main workflow script
+│   └── find_ncsu_endpoint.sh     Configuration helper
+│
+├── docs/                         Documentation
+│   ├── THREE_TIER_SETUP.md       Setup guide
+│   ├── THREE_TIER_QUICK_REF.md   Quick reference
+│   └── THREE_TIER_SUMMARY.md     What changed
+│
+├── config/                       Configuration files
+│   └── snakemake_config_enhanced.yaml
+│
+├── slurm/                        SLURM job scripts
+│   └── run_snakemake_enhanced.sh
+│
+├── Snakefile_enhanced            Snakemake workflow
+│
+└── data/                         Processing configs
+    └── profiles/
+        ├── MD_calibration_matrix_optimized.npy
+        └── MD_shr661_raw16.pp3
+```

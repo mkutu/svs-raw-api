@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime
 
 # Import configuration
-configfile: "config/snakemake_config_enhanced.yaml"
+configfile: "config/scinet.yaml"
 
 # Import database manager
 sys.path.insert(0, str(Path.cwd() / "scripts"))
