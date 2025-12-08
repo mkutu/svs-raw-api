@@ -23,11 +23,16 @@ paths:
   # RawTherapee CLI (validated by validate_rawtherapee.sh)
   rawtherapee_cli: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
 
+  rawtherapee_validate_script: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/scripts/validate_rawtherapee.sh
+
+  temp_dng_dir: /tmp/temp_dngs  # Temporary DNG storage during processing
+
 # Image processing parameters
 processing:
   width: 13376
   height: 9528
   threads_per_image: 4  # Threads per conversion task
+  num_instances: 12    # Concurrent conversion tasks (SLURM max_parallel_jobs should match)
   cleanup_dngs: true   # Keep DNGs after creating JPGs (recommended: false for archival)
   cleanup_raws: false  # Keep RAWs after DNG conversion (recommended: true to save space)
 

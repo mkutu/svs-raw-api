@@ -191,3 +191,50 @@ class SVSRaw2DNG:
         converter.options(tags, path="", compress=False)
         converter.convert(raw_image, filename=str(output_path))
         return output_path
+
+def dng2jpg(jpg_dir, ):
+
+    jpg_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        logger.info(f"[DNG→JPG] {wildcards.basename}")
+
+        cmd = [
+            str(params.rawtherapee),
+            "-O", str(output.jpg),
+            "-p", str(params.pp3_profile),
+            "-j100", "-js3", "-Y",
+            "-c", str(input.dng)
+        ]
+
+        env = {
+            **os.environ,
+            "OMP_NUM_THREADS": str(params.threads),
+            "OMP_DYNAMIC": "TRUE",
+            "LANG": "en_US.UTF-8",
+        }
+
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+
+        logger.info(f"✓ JPG created: {output.jpg}")
+
+        # Optional cleanup
+        if PROCESSING.get("cleanup_dngs", False):
+            Path(input.dng).unlink(missing_ok=True)
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"RawTherapee error: {e.stderr}")
+        open(log[0], 'w').write(f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}\n")
+        raise
+
+    except Exception as e:
+        logger.error(f"DNG→JPG failed: {e}")
+        open(log[0], 'w').write(f"ERROR: {e}\n")
+        raise

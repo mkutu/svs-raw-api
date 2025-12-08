@@ -13,13 +13,12 @@ import yaml
 from svs_raw_api import SVSRaw2DNG, __version__
 
 
-def setup_logging(level=logging.INFO):
-    """Configure logging."""
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    return logging.getLogger('svs-convert')
+logger = logging.getLogger('svs-convert')
 
 
 def load_raw_image(raw_path: Path, height: int, width: int) -> np.ndarray:
@@ -62,6 +61,20 @@ def load_config(config_path: Path) -> dict:
     except Exception as e:
         raise ValueError(f"Failed to load config file {config_path}: {e}")
 
+def process_files(input_path: Path, output_path: Path, converter: SVSRaw2DNG, camera_tags: dict):
+    # Single file conversion
+    logger.info(f"Converting {input_path} → {output_path}")
+    try:
+        height, width = get_image_dimensions(camera_tags)
+        raw_image = load_raw_image(input_path, height, width)
+        converter.save_dng(raw_image, output_path, camera_tags)
+        logger.info(f"Successfully created {output_path}")
+    except Exception as e:
+        logger.error(f"Conversion failed: {e}")
+        sys.exit(1)
+
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -83,9 +96,6 @@ Examples:
     parser.add_argument('-i', '--config', required=True, type=Path,
                         help='Input RAW file or directory')
     args = parser.parse_args()
-    
-    # Setup logging
-    logger = setup_logging(logging.INFO)
     
     # Load config
     logger.info(f"Loading configuration from {args.config}")
