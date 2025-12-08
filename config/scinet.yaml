@@ -9,19 +9,19 @@ batch_id: "MD_2025-09-09"  # Set via command line: --config batch_id=MD_2025-10-
 # Paths - SCINet Ceres specific
 paths:
   # Repository root
-  repo_root: /home/matthew.kutugata/repos/svs-raw-api
+  repo_root: /project/dash_agir/matthew.kutugata/repos/svs-raw-api
   
   # Storage locations
   ceres_scratch: /90daydata/dash_agir/data/semifield-upload  # Input (90-day scratch)
   output_base: /project/dash_agir/matthew.kutugata/semifield-developed-images  # Output (permanent)
   
   # Processing profiles
-  svs_tags: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/svs_tags.yaml
-  color_matrix: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_calibration_matrix_optimized.npy
-  pp3_profile: /home/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_shr661_raw16.pp3
+  svs_tags: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/config/profiles/svs_tags.yaml
+  color_matrix: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_calibration_matrix_optimized.npy
+  pp3_profile: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/config/profiles/MD_shr661_raw16.pp3
   
   # RawTherapee CLI (validated by validate_rawtherapee.sh)
-  rawtherapee_cli: /home/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
+  rawtherapee_cli: /project/dash_agir/matthew.kutugata/repos/svs-raw-api/squashfs-root/usr/bin/rawtherapee-cli
 
 # Image processing parameters
 processing:

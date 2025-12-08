@@ -29,7 +29,38 @@ def load_raw_image(raw_path: Path, height: int, width: int) -> np.ndarray:
         return raw_data.reshape((height, width))
     except Exception as e:
         raise ValueError(f"Failed to load RAW image {raw_path}: {e}")
+    
+def load_camera_tags(tags_path: Path) -> dict:
+    """Load camera tags from YAML file."""
+    try:
+        with open(tags_path, 'r') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        raise ValueError(f"Failed to load camera tags file {tags_path}: {e}")
+    
+def load_color_matrix(matrix_path: Path) -> np.ndarray:
+    """Load color calibration matrix from .npy file."""
+    try:
+        return np.load(matrix_path, allow_pickle=True)
+    except Exception as e:
+        raise ValueError(f"Failed to load color matrix {matrix_path}: {e}")
+    
+def get_image_dimensions(tags: dict) -> tuple:
+    """Extract image dimensions from camera tags."""
+    try:
+        height = tags['image']['SVCamImageHeight']
+        width = tags['image']['SVCamImageWidth']
+        return height, width
+    except KeyError as e:
+        raise ValueError(f"Image dimensions not found in camera tags: {e}")
 
+def load_config(config_path: Path) -> dict:
+    """Load configuration from YAML file."""
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        raise ValueError(f"Failed to load config file {config_path}: {e}")
 
 def main():
     """Main CLI entry point."""
@@ -49,48 +80,30 @@ Examples:
         """
     )
     
-    parser.add_argument('-i', '--input', required=True, type=Path,
+    parser.add_argument('-i', '--config', required=True, type=Path,
                         help='Input RAW file or directory')
-    parser.add_argument('-o', '--output', required=True, type=Path,
-                        help='Output DNG file or directory')
-    parser.add_argument('-m', '--matrix', required=True, type=Path,
-                        help='Color calibration matrix (.npy file)')
-    parser.add_argument('-t', '--tags', type=Path,
-                        help='Camera tags YAML file (optional)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Verbose output')
-    parser.add_argument('--version', action='version',
-                        version=f'svs-raw-api {__version__}')
-    
     args = parser.parse_args()
     
     # Setup logging
-    logger = setup_logging(logging.DEBUG if args.verbose else logging.INFO)
+    logger = setup_logging(logging.INFO)
     
+    # Load config
+    logger.info(f"Loading configuration from {args.config}")
+    cfg = load_config(args.config)
+
     # Load color matrix
-    logger.info(f"Loading color matrix from {args.matrix}")
-    try:
-        color_matrix = np.load(args.matrix, allow_pickle=True)
-    except Exception as e:
-        logger.error(f"Failed to load color matrix: {e}")
-        raise ValueError(f"Failed to load color matrix: {e}")
+    color_matrix_path = cfg['paths']['color_matrix']    
+    logger.info(f"Loading color matrix from {color_matrix_path}")
+    color_matrix = load_color_matrix(color_matrix_path)
     
-    # Load camera tags if provided
-    camera_tags = None
-    if args.tags:
-        logger.info(f"Loading camera tags from {args.tags}")
-        try:
-            with open(args.tags) as f:
-                camera_tags = yaml.safe_load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load camera tags: {e}")
+    # Load camera tags
+    camera_tags_path = cfg['paths']['svs_tags']
+    logger.info(f"Loading camera tags from {camera_tags_path}")
+    camera_tags = load_camera_tags(camera_tags_path)
     
     # Get width and height from camera tags if available
-    if camera_tags and 'image' in camera_tags:
-        height = camera_tags['image']['SVCamImageHeight']
-        width = camera_tags['image']['SVCamImageWidth']
-    else:
-        raise ValueError("Camera tags must be provided to obtain image dimensions.")
+    height, width = get_image_dimensions(camera_tags)
+    logger.info(f"Image dimensions from tags: {width}x{height}")
     
     # Create converter
     logger.info("Initializing converter")
@@ -99,8 +112,8 @@ Examples:
     )
     
     # Process files
-    input_path = args.input
-    output_path = args.output
+    input_path = cfg['paths']['input']
+    output_path = cfg['paths']['output']
     
     if input_path.is_file():
         # Single file conversion
@@ -128,7 +141,8 @@ Examples:
             logger.info(f"Converting {raw_file.name} → {output_file.name}")
             
             try:
-                raw_image = load_raw_image(raw_file, args.height, args.width)
+                height, width = get_image_dimensions(camera_tags)
+                raw_image = load_raw_image(raw_file, height, width)
                 converter.save_dng(raw_image, output_file, camera_tags)
                 success_count += 1
             except Exception as e:
