@@ -84,7 +84,7 @@ class DngToJpg:
         """Check if RawTherapee CLI is accessible."""
         try:
             result = subprocess.run([str(self.rt_cli), '--version'], capture_output=True, text=True)
-            return result.returncode == 0
+            return result.returncode in [0, 2]
         except FileNotFoundError:
             return False
         

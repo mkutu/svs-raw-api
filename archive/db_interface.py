@@ -81,7 +81,7 @@ def sync_batch_inventory(conn, batch_id: str) -> Dict:
             SUM(CASE WHEN file_ext = 'dng' AND data_state = 'developed_jpg' THEN 1 ELSE 0 END) as dng_count,
             SUM(CASE WHEN file_ext IN ('jpg','jpeg') AND data_state = 'developed_jpg' THEN 1 ELSE 0 END) as jpg_count,
             SUM(CASE WHEN file_ext = 'json' AND data_state = 'developed_jpg' THEN 1 ELSE 0 END) as json_count,
-            MAX(location) as primary_location,
+            MAX(site) as primary_site,
             MAX(lts_root) as primary_lts_root
         FROM source.globus_file_index
         WHERE batch_id = %s AND entry_type = 'file'
@@ -90,19 +90,19 @@ def sync_batch_inventory(conn, batch_id: str) -> Dict:
     INSERT INTO processed.batch_processing_status (
         batch_id, batch_state, batch_date,
         raw_file_count, dng_file_count, jpg_file_count, json_file_count,
-        primary_location, primary_lts_root
+        primary_site, primary_lts_root
     )
     SELECT 
         batch_id, batch_state, batch_date,
         raw_count, dng_count, jpg_count, json_count,
-        primary_location, primary_lts_root
+        primary_site, primary_lts_root
     FROM file_counts
     ON CONFLICT (batch_id) DO UPDATE SET
         raw_file_count = EXCLUDED.raw_file_count,
         dng_file_count = EXCLUDED.dng_file_count,
         jpg_file_count = EXCLUDED.jpg_file_count,
         json_file_count = EXCLUDED.json_file_count,
-        primary_location = EXCLUDED.primary_location,
+        primary_site = EXCLUDED.primary_site,
         primary_lts_root = EXCLUDED.primary_lts_root,
         updated_at = now()
     RETURNING *;
@@ -159,7 +159,7 @@ def get_batch_files(conn, batch_id: str, data_state: str, file_ext: str = None) 
         root_path,
         size_bytes,
         endpoint,
-        location,
+        site,
         lts_root
     FROM source.globus_file_index
     WHERE 
